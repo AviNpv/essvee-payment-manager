@@ -11,6 +11,8 @@ services:
     plan: starter
     region: singapore
     dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeployTrigger: commit
     envVars:
       - key: DATABASE_URL
         fromDatabase:
