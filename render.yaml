@@ -2,13 +2,13 @@ databases:
   - name: essvee-db
     databaseName: essvee
     user: essvee
-    plan: starter
+    plan: free
 
 services:
   - type: web
     name: essvee-payment-manager
     runtime: docker
-    plan: starter
+    plan: free
     region: singapore
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
