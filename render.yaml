@@ -1,0 +1,61 @@
+databases:
+  - name: essvee-db
+    databaseName: essvee
+    user: essvee
+    plan: starter
+
+services:
+  - type: web
+    name: essvee-payment-manager
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: essvee-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: ADMIN_EMAIL
+        value: admin@essvee.in
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://essvee-payment-manager.onrender.com
+      - key: ENABLE_SCHEDULER
+        value: "true"
+      - key: TIMEZONE
+        value: Asia/Kolkata
+      - key: PAYMENT_PROVIDER
+        value: UPI
+      # Set to your real Render HTTPS URL, e.g. https://<service>.onrender.com
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: UPI_VPA
+        sync: false
+      - key: UPI_PAYEE_NAME
+        sync: false
+      - key: UPI_AMOUNT_MODE
+        value: CUSTOMER_ENTERS
+      - key: RAZORPAY_MODE
+        value: test
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_WABA_ID
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false

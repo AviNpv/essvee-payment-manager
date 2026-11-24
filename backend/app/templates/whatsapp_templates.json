@@ -1,0 +1,50 @@
+{
+  "_readme": "Submit these templates to Meta WhatsApp Business Manager for approval. Variables use {{1}}, {{2}} etc. The URL button must be configured with a variable URL token ({{1}}). The backend supplies an HTTPS redirect (https://<your-domain>/pay/<token>) that opens the customer's UPI app chooser; Meta does not allow upi:// URLs directly in template buttons.",
+  "templates": [
+    {
+      "name": "payment_reminder",
+      "category": "UTILITY",
+      "language": "en",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hello {{1}},\n\nGreetings from ESSVEE Associates.\n\nYour outstanding balance is ₹{{2}}. You may pay the full amount or any part of it.\n\nKindly use the Pay Now button to open your UPI app and complete the payment.\n\nAfter paying, please share the UTR with our team for confirmation.\n\nThank you for choosing ESSVEE Associates."
+        },
+        {
+          "type": "BUTTON",
+          "text": "Pay Now",
+          "type_of_button": "URL",
+          "url": "https://example.com/pay/{{1}}"
+        }
+      ]
+    },
+    {
+      "name": "payment_confirmation",
+      "category": "UTILITY",
+      "language": "en",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hello {{1}},\n\nESSVEE Associates has confirmed your payment of ₹{{2}}.\n\nYour remaining outstanding balance is ₹{{3}}.\n\nThank you for your payment!"
+        }
+      ]
+    },
+    {
+      "name": "partial_payment_reminder",
+      "category": "UTILITY",
+      "language": "en",
+      "components": [
+        {
+          "type": "BODY",
+          "text": "Hello {{1}},\n\nWe have updated your payment records.\n\nYour remaining outstanding balance is ₹{{2}}.\n\nKindly use the Pay Now button to open your UPI app and pay whatever amount you can. Please share the UTR with our team for confirmation.\n\nThank you,\nESSVEE Associates."
+        },
+        {
+          "type": "BUTTON",
+          "text": "Pay Now",
+          "type_of_button": "URL",
+          "url": "https://example.com/pay/{{1}}"
+        }
+      ]
+    }
+  ]
+}
