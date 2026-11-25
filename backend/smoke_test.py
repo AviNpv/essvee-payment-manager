@@ -45,7 +45,7 @@ print("google settings:", r.status_code, r.json().get("configured", {}).get("goo
 r = c.get("/api/sheets/status", headers=h)
 print("sheets status:", r.status_code, r.json().get("tabs"))
 
-# Payment confirmation stays internal; the Sheets Customer Details workflow uses
+# Payment confirmation stays internal; a lower balance in a Sheets day tab uses
 # the same create/confirm service path after an explicit administrator approval.
 with SessionLocal() as db:
     customer = customer_service.get_by_phone(db, "9876543210")

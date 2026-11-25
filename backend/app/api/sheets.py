@@ -10,7 +10,6 @@ from app.schemas import (
     ImportOut,
     PaymentOut,
     PaymentRejectRequest,
-    SheetPaymentConfirmOut,
     SheetPreviewOut,
     SheetPreviewRequest,
     SheetSendOut,
@@ -44,15 +43,6 @@ def send(
     user: User = Depends(get_current_user),
 ):
     return sheets_service.confirm_send(db, payload, actor=user)
-
-
-@router.post("/confirm-payments", response_model=SheetPaymentConfirmOut)
-def confirm_payments(
-    payload: SheetSendRequest,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    return sheets_service.confirm_payments(db, payload, actor=user)
 
 
 @router.post("/pending-payments/{payment_id}/reject", response_model=PaymentOut)

@@ -3,7 +3,7 @@
 The WhatsApp URL button points to an HTTPS redirect on this application. That
 redirect opens ``upi://pay?...``, which makes a phone show its installed UPI
 apps. Payments are never auto-confirmed; the administrator still reviews and
-approves the real amount in the Google Sheets Customer Details workflow.
+approves the real amount when a lower balance is confirmed from a Google Sheets day tab.
 """
 
 import secrets

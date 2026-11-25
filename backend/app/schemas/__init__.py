@@ -320,6 +320,7 @@ class SheetPreviewRowOut(BaseModel):
     reason: str
     customer_id: UUID | None = None
     pending_payment_id: UUID | None = None
+    message_reason: str | None = None
     error: str | None = None
 
 
@@ -335,6 +336,8 @@ class SheetPreviewOut(BaseModel):
     eligible_count: int
     invalid_count: int
     reason_breakdown: dict[str, int]
+    message_reason_breakdown: dict[str, int] = {}
+    reminder_count: int = 0
     rows: list[SheetPreviewRowOut]
     confirmation_token: str
     quiet_hours: bool = False
@@ -352,18 +355,12 @@ class SheetSendOut(BaseModel):
     import_id: UUID
     status: str
     updated_count: int
+    payments_confirmed: int = 0
+    adjustments: int = 0
     sent_count: int
     failed_count: int
     skipped_count: int
-    total_amount: Decimal
-    message: str
-
-
-class SheetPaymentConfirmOut(BaseModel):
-    import_id: UUID
-    status: str
-    confirmed_count: int
-    skipped_count: int
+    messages_skipped_count: int = 0
     total_amount: Decimal
     message: str
 

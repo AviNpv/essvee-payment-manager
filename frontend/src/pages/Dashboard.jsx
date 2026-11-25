@@ -31,8 +31,7 @@ export default function Dashboard() {
   const quickActions = [
     { label: 'Add customer', icon: Plus, to: '/customers?new=1' },
     { label: 'Google Sheets', icon: FileSpreadsheet, to: '/sheets' },
-    { label: 'Send reminders', icon: Receipt, to: '/sheets?tab=Tuesday' },
-    { label: 'Confirm payments', icon: CheckCircle2, to: '/sheets?tab=Customer%20Details' },
+    { label: 'Update balances', icon: Receipt, to: '/sheets?tab=Tuesday' },
     { label: 'Export report', icon: Download, action: async () => {
       try { await download('/reports/export', { report: 'collections', format: 'xlsx' }, 'post'); toast.success('Report downloaded') }
       catch (e) { toast.error(errMsg(e)) }
@@ -136,7 +135,7 @@ export default function Dashboard() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader title="Awaiting verification" subtitle="Webhook payments — review before approval" action={<button className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => navigate('/sheets?tab=Customer%20Details')}>Open Sheets <ArrowRight className="inline h-3 w-3" /></button>} />
+          <CardHeader title="Awaiting verification" subtitle="Webhook payments — confirm or reject from a Sheets preview" action={<button className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => navigate('/sheets?tab=Tuesday')}>Open Sheets <ArrowRight className="inline h-3 w-3" /></button>} />
           {data.awaiting_verification.length ? (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {data.awaiting_verification.map((payment) => (
