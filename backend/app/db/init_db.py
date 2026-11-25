@@ -56,6 +56,8 @@ DEFAULT_SETTINGS: dict[str, tuple[bool, str, str]] = {
     "upi_payee_name": (False, "Payee name shown in UPI apps", settings.upi_payee_name),
     "public_base_url": (False, "Public HTTPS base URL used in WhatsApp buttons", settings.public_base_url),
     "upi_amount_mode": (False, "CUSTOMER_ENTERS or FIXED_OUTSTANDING", settings.upi_amount_mode),
+    "google_service_account_json": (True, "Google service account JSON (store as a Render secret)", settings.google_service_account_json),
+    "google_spreadsheet_id": (False, "Google Spreadsheet ID or share URL", settings.google_spreadsheet_id),
 }
 
 

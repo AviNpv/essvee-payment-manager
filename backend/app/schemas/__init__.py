@@ -301,6 +301,62 @@ class MessageOut(ORMModel):
 
 
 # ---------------------------------------------------------------------------
+# Google Sheets
+# ---------------------------------------------------------------------------
+class SheetPreviewRequest(BaseModel):
+    tab: str = Field(min_length=1, max_length=40)
+    spreadsheet_id: str | None = Field(default=None, max_length=500)
+
+
+class SheetPreviewRowOut(BaseModel):
+    row_number: int
+    name: str
+    phone: str | None = None
+    amount: Decimal | None = None
+    current_balance: Decimal | None = None
+    difference: Decimal | None = None
+    status: str
+    reason: str
+    customer_id: UUID | None = None
+    error: str | None = None
+
+
+class SheetPreviewOut(BaseModel):
+    import_id: UUID
+    tab: str
+    spreadsheet_id: str
+    row_count: int
+    matched_count: int
+    unmatched_count: int
+    opted_out_count: int
+    eligible_count: int
+    invalid_count: int
+    reason_breakdown: dict[str, int]
+    rows: list[SheetPreviewRowOut]
+    confirmation_token: str
+    quiet_hours: bool = False
+    directory_created: int = 0
+    directory_updated: int = 0
+    warnings: list[str] = []
+
+
+class SheetSendRequest(BaseModel):
+    import_id: UUID
+    confirmation_token: str
+
+
+class SheetSendOut(BaseModel):
+    import_id: UUID
+    status: str
+    updated_count: int
+    sent_count: int
+    failed_count: int
+    skipped_count: int
+    total_amount: Decimal
+    message: str
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 class CompanySettings(BaseModel):
@@ -341,6 +397,11 @@ class UPISettings(BaseModel):
     upi_amount_mode: str = "CUSTOMER_ENTERS"
 
 
+class GoogleSettings(BaseModel):
+    google_service_account_json: str = ""
+    google_spreadsheet_id: str = ""
+
+
 class ReminderSettings(BaseModel):
     automation_enabled: bool = False
     frequency_days: int = Field(default=7, ge=1, le=90)
@@ -368,6 +429,7 @@ class SettingsOut(BaseModel):
     whatsapp: WhatsAppSettings
     razorpay: RazorpaySettings
     upi: UPISettings
+    google: GoogleSettings
     reminder: ReminderSettings
     payment: PaymentSettings
     configured: dict[str, bool]

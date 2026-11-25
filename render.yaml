@@ -55,3 +55,8 @@ services:
         sync: false
       - key: WHATSAPP_APP_SECRET
         sync: false
+      # Store the entire Google service account JSON as a Render secret.
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GOOGLE_SPREADSHEET_ID
+        sync: false

@@ -11,6 +11,7 @@ from app.db.init_db import DEFAULT_SETTINGS
 from app.models import AppSetting, ReminderSetting
 from app.schemas import (
     CompanySettings,
+    GoogleSettings,
     PaymentSettings,
     RazorpaySettings,
     ReminderSettings,
@@ -28,6 +29,7 @@ SECRET_KEYS = {
     "whatsapp_app_secret",
     "razorpay_key_secret",
     "razorpay_webhook_secret",
+    "google_service_account_json",
 }
 
 GROUPS: dict[str, list[str]] = {
@@ -64,6 +66,10 @@ GROUPS: dict[str, list[str]] = {
         "upi_payee_name",
         "public_base_url",
         "upi_amount_mode",
+    ],
+    "google": [
+        "google_service_account_json",
+        "google_spreadsheet_id",
     ],
 }
 
@@ -251,6 +257,14 @@ def whatsapp_credentials(db: Session) -> dict[str, str]:
     }
 
 
+def google_credentials(db: Session) -> dict[str, str]:
+    """The JSON key is a secret; the spreadsheet ID is not. Env values are fallbacks only."""
+    return {
+        "service_account_json": get(db, "google_service_account_json") or env.google_service_account_json,
+        "spreadsheet_id": get(db, "google_spreadsheet_id") or env.google_spreadsheet_id,
+    }
+
+
 def all_settings(db: Session) -> SettingsOut:
     values = get_all_masked(db)
     reminder = get_reminder(db)
@@ -263,6 +277,7 @@ def all_settings(db: Session) -> SettingsOut:
             **{k: values.get(k, "") for k in GROUPS["razorpay"]}
         ),
         upi=UPISettings(**{k: values.get(k, "") for k in GROUPS["upi"]}),
+        google=GoogleSettings(**{k: values.get(k, "") for k in GROUPS["google"]}),
         reminder=ReminderSettings.model_validate(reminder, from_attributes=True),
         payment=PaymentSettings.model_validate(reminder, from_attributes=True),
         configured={
@@ -276,6 +291,8 @@ def all_settings(db: Session) -> SettingsOut:
                 whatsapp_credentials(db)["webhook_verify_token"]
                 and whatsapp_credentials(db)["app_secret"]
             ),
+            "google_sheets": bool(google_credentials(db)["service_account_json"]),
+            "google_spreadsheet": bool(google_credentials(db)["spreadsheet_id"]),
         },
     )
 

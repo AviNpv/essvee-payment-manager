@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Building2, CheckCircle2, CreditCard, MessageCircle, PlugZap, Save, Settings2, Smartphone, Trash2, XCircle } from 'lucide-react'
+import { Building2, CheckCircle2, CreditCard, FileSpreadsheet, MessageCircle, PlugZap, Save, Settings2, Smartphone, Trash2, XCircle } from 'lucide-react'
 import api, { errMsg } from '../lib/api'
 import { useToast } from '../lib/Toast'
-import { Card, CardHeader, Field, Loading, PageHeader, Spinner, Toggle } from '../components/ui'
+import { Badge, Card, CardHeader, Field, Loading, PageHeader, Spinner, Toggle } from '../components/ui'
 
 const sections = [
   { key: 'company', label: 'Company', icon: Building2 },
   { key: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { key: 'razorpay', label: 'Razorpay', icon: CreditCard },
   { key: 'upi', label: 'UPI', icon: Smartphone },
+  { key: 'google', label: 'Google Sheets', icon: FileSpreadsheet },
   { key: 'reminder', label: 'Reminders', icon: Settings2 },
   { key: 'payment', label: 'Payments', icon: CreditCard },
 ]
 
-const secretFields = new Set(['whatsapp_access_token', 'whatsapp_phone_number_id', 'whatsapp_waba_id', 'whatsapp_webhook_verify_token', 'whatsapp_app_secret', 'razorpay_key_secret', 'razorpay_webhook_secret'])
+const secretFields = new Set(['whatsapp_access_token', 'whatsapp_phone_number_id', 'whatsapp_waba_id', 'whatsapp_webhook_verify_token', 'whatsapp_app_secret', 'razorpay_key_secret', 'razorpay_webhook_secret', 'google_service_account_json'])
 
 export default function Settings() {
   const [data, setData] = useState(null)
@@ -140,6 +141,25 @@ export default function Settings() {
           <p>2. That page immediately opens <code className="rounded bg-slate-100 px-1 py-0.5 text-xs dark:bg-slate-800">upi://pay?…</code>, so the phone shows GPay, PhonePe, Paytm and other installed UPI apps.</p>
           <p>3. With “Customer enters amount”, the UPI app does not force an amount. The customer pays what they want and shares the UTR; your team confirms the real payment in Payments.</p>
           <p className="text-xs text-slate-400">Need Razorpay instead? Choose “Razorpay Payment Link” above and configure Razorpay credentials.</p>
+        </div></Card>
+      </>}
+
+      {section === 'google' && <>
+        <Card><CardHeader title="Google Sheets connection" subtitle="Service account JSON is encrypted at rest — never returned to the browser in plain text" /><div className="space-y-4 p-5">
+          <div className="flex flex-wrap gap-2 text-xs">
+            <Badge tone={data.configured?.google_sheets ? 'green' : 'amber'}>{data.configured?.google_sheets ? 'Service account configured' : 'Service account missing'}</Badge>
+            <Badge tone={data.configured?.google_spreadsheet ? 'green' : 'amber'}>{data.configured?.google_spreadsheet ? 'Spreadsheet linked' : 'Spreadsheet not linked'}</Badge>
+          </div>
+          {text('google', 'google_spreadsheet_id', 'Spreadsheet ID or share URL', 'text', 'Paste the full Google Sheets URL — the ID is extracted automatically.')}
+          <Field label="Service account JSON" hint="Prefer storing this as GOOGLE_SERVICE_ACCOUNT_JSON in Render. Pasting here stores it encrypted in the database.">
+            <div className="flex gap-2">
+              <textarea className="input min-h-[120px] font-mono text-xs" value={form.google.google_service_account_json || ''} onChange={(e) => set('google', 'google_service_account_json', e.target.value)} placeholder='{"type":"service_account",…}' />
+              {form.google.google_service_account_json && (
+                <button className="btn-ghost px-2" title="Clear credential" onClick={() => clear('google_service_account_json')}><Trash2 className="h-4 w-4 text-rose-500" /></button>
+              )}
+            </div>
+          </Field>
+          <p className="text-xs text-slate-500">Share the spreadsheet with the service account email shown on the <strong>Google Sheets</strong> page as <strong>Viewer</strong>. The Tuesday, Thursday and Saturday tabs need <strong>Name</strong> and <strong>Amount</strong>; the Customers tab needs <strong>Name</strong> and <strong>Mobile</strong>.</p>
         </div></Card>
       </>}
 

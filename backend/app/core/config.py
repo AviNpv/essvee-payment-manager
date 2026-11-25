@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     whatsapp_app_secret: str = ""
     whatsapp_api_version: str = "v21.0"
 
+    # Google Sheets (the service account JSON is a secret; the spreadsheet ID is not)
+    google_service_account_json: str = ""
+    google_spreadsheet_id: str = ""
+
     # Automation
     enable_scheduler: bool = True
     timezone: str = "Asia/Kolkata"

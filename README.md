@@ -36,23 +36,23 @@ ESSVEE PAYMENT COLLECTION/
 │   ├── migrations/             # Initial schema revision 638b1677c532
 │   ├── requirements.txt
 │   ├── pytest.ini
-│   ├── tests/                  # 67 automated tests
+│   ├── tests/                  # 70 automated tests
 │   ├── smoke_test.py           # Manual backend end-to-end smoke script
 │   └── app/
-│       ├── api/                # auth, customers, excel, pay, payments, whatsapp,
-│       │                       # webhooks, reports, settings, system routers
+│       ├── api/                # auth, customers, excel, sheets, pay, payments,
+│       │                       # whatsapp, webhooks, reports, settings, system routers
 │       ├── core/               # config, security, errors, rate limiting
 │       ├── db/                 # engine/session and bootstrap seed
 │       ├── models/entities.py  # All ORM tables
 │       ├── schemas/__init__.py # Pydantic request/response models
 │       ├── services/           # balance, customer, payment, upi, razorpay, whatsapp,
-│       │                       # reminder, excel, reports, settings, audit
+│       │                       # reminder, excel, sheets, reports, settings, audit
 │       ├── templates/whatsapp_templates.json
 │       └── main.py             # FastAPI app, scheduler, CORS, SPA fallback
 └── frontend/
     ├── src/
     │   ├── pages/              # Login, Dashboard, Customers, Payments, Reminders,
-    │   │                       # Messages, Imports, Reports, Settings, System
+    │   │                       # Messages, Imports, Sheets, Reports, Settings, System
     │   ├── components/         # Layout/sidebar/theme, UI primitives
     │   ├── lib/                # Axios client, formatting, toasts
     │   └── App.jsx             # Routes and auth guard
@@ -160,6 +160,9 @@ All endpoints except `/health`, `/api/health` and webhooks require `Authorizatio
 | GET | `/api/excel/template` | Download import template. |
 | GET | `/api/excel/export` | Export customers XLSX/CSV. |
 | GET | `/api/excel/imports` | Import history. |
+| GET | `/api/sheets/status` | Google credentials/spreadsheet status and required tab names. |
+| POST | `/api/sheets/preview` | Read a day tab, sync Customers directory, classify rows, issue token. |
+| POST | `/api/sheets/send` | Explicit token-gated balance updates + approved Pay Now reminders. |
 | GET | `/api/payments` | List/filter payments. |
 | POST | `/api/payments/manual` | Create payment awaiting confirmation. |
 | POST | `/api/payments/{id}/confirm` | **Explicit admin approval**; changes balance. |
@@ -202,6 +205,7 @@ Copy `.env.example`. The application reads these both from the environment and a
 - **UPI:** `UPI_VPA`, `UPI_PAYEE_NAME`, `PUBLIC_BASE_URL`, `UPI_AMOUNT_MODE=CUSTOMER_ENTERS|FIXED_OUTSTANDING`.
 - **Razorpay (optional):** `RAZORPAY_MODE` (`test`/`live`), `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_CALLBACK_URL`.
 - **WhatsApp:** `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_WABA_ID`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_API_VERSION`.
+- **Google Sheets:** `GOOGLE_SERVICE_ACCOUNT_JSON` (entire service account JSON as one secret), `GOOGLE_SPREADSHEET_ID` (ID or full share URL).
 - **Automation:** `ENABLE_SCHEDULER`, `TIMEZONE`.
 
 Secrets entered in the Settings UI are stored encrypted in `app_settings`; the API only returns masked values. A masked value submitted on save means “leave unchanged”.
@@ -237,11 +241,25 @@ Secrets entered in the Settings UI are stored encrypted in `app_settings`; the A
 6. Do not trust the browser return URL: the admin confirms payments explicitly in **Payments**.
 7. To switch back to Razorpay at any time, set **Settings → UPI → Payment provider** to `Razorpay Payment Link`; existing active links are cancelled when a new link is generated.
 
-## 9. Reminder rules
+## 9. Google Sheets reminders
+
+Use the **Google Sheets** page to turn a daily worksheet into audited, preview-first Pay Now reminders. No invoice is created at any point.
+
+1. In Google Cloud, enable the **Google Sheets API** and create a service account. Generate a JSON key and store the **entire JSON** as the Render secret `GOOGLE_SERVICE_ACCOUNT_JSON` (or in Settings → Google Sheets for local use). Never commit or paste the key into chat.
+2. Share the spreadsheet with the service account's `…iam.gserviceaccount.com` email as **Viewer**. Paste the spreadsheet URL into **Settings → Google Sheets** so the app extracts the spreadsheet ID.
+3. The workbook must contain tabs **`Tuesday`**, **`Thursday`** and **`Saturday`**, each with **`Name`** and **`Amount`** columns. Add a **`Customers`** tab with **`Name`** and **`Mobile`** (or `Phone` / `WhatsApp Number`) columns as the predefined name → number directory.
+4. Click **Preview rows**. The app syncs the Customers directory into the database (names/numbers only — consent, status, exclusions and balances are untouched), joins each row by name, and classifies it as ready, unmatched, opted out, inactive, excluded, awaiting review, outside the reminder interval, or invalid.
+5. Review matched/unmatched/opted-out counts and the exact balance changes. Nothing is sent at preview time.
+6. Click **Confirm Send** to issue a short-lived confirmation token, then explicitly approve. On confirmation only: the sheet `Amount` becomes the customer's outstanding balance through an `ADJUSTMENT` ledger entry, a Pay Now link is generated/reused, and one approved reminder template is sent via WhatsApp Cloud API.
+7. Quiet hours, daily limits, consent/opt-out, active status, reminder interval and maximum are rechecked at send time. Replaying a confirmed preview is rejected with HTTP 409. Every sync, balance change, link and message is written to the audit log.
+
+The service account only needs read access. The app signs a short-lived JWT locally and calls the Sheets REST API directly — there is no browser automation or scraping, and no Google credential is ever returned to the frontend. A missing key, missing spreadsheet ID or unshared sheet produces a clear configuration error instead of a fake success.
+
+## 10. Reminder rules
 
 Eligibility requires: non-zero outstanding balance, `ACTIVE` status, opt-in consent, not excluded, no awaiting-confirmation payment, no reminder within the configured interval, under `max_reminders`, outside quiet hours, and within the global daily limit. Manual and bulk sends reuse a payment link per customer to preserve idempotency. Bulk send requires a preview token containing the eligible IDs (10-minute expiry); targeting an ID not in the token is rejected. Automation is off by default and can be paused at any time.
 
-## 10. Deployment
+## 11. Deployment
 
 ### Live deployment (current)
 
@@ -277,7 +295,7 @@ The container start command also runs `alembic upgrade head`. The application no
 
 The root `Dockerfile` builds the Vite app, copies `frontend/dist` into the Python image, installs backend requirements and starts Uvicorn on port 8000 with Alembic migrations. Compose wires PostgreSQL with a health check and persistent volume.
 
-## 11. Phase completion record
+## 12. Phase completion record
 
 | Phase | Delivered | Verification |
 | --- | --- | --- |
@@ -290,9 +308,9 @@ The root `Dockerfile` builds the Vite app, copies `frontend/dist` into the Pytho
 | 7 – Reports/audit | Dashboard, report tables/exports, audit logs, webhook events, scheduler runs. | Reports/settings/audit tests. |
 | 8 – Frontend | Auth, dashboard, customers, payments, reminders, messages, imports, reports, settings, system pages. | `npm run build`; authenticated UI walkthrough with no console errors. |
 | 9 – Deployment | Dockerfile, Compose, Render Blueprint, `.env.example`, `.gitignore`. | Files validated by inspection; Docker unavailable locally. |
-| 10 – Final hardening | Decimal-only exports, UTC datetime normalization, masked settings, UPI app chooser, final tests/docs. | 67 tests pass; migration check clean; single-service static/API serving returns 200. |
+| 10 – Final hardening | Decimal-only exports, UTC datetime normalization, masked settings, UPI app chooser, final tests/docs. | 70 tests pass; migration check clean; single-service static/API serving returns 200. |
 
-## 12. Tests and verification results
+## 13. Tests and verification results
 
 Run from `backend/`:
 
@@ -303,7 +321,7 @@ $env:SECRET_KEY = 'pytest-secret-key-do-not-use-in-production'
 & "..\.venv\Scripts\python.exe" -m pytest tests -q --disable-warnings
 ```
 
-Result in this build environment: **67 passed** (including customers, Excel import/reconciliation, payments, UPI deep links/redirect/app chooser, signed webhooks and idempotency, link reuse/cancel, WhatsApp templates/consent/status/opt-out, bulk preview tokens, scheduler jobs, auth, settings masking, reports and audit).
+Result in this build environment: **70 passed** (including customers, Excel import/reconciliation, payments, UPI deep links/redirect/app chooser, signed webhooks and idempotency, link reuse/cancel, WhatsApp templates/consent/status/opt-out, bulk preview tokens, scheduler jobs, auth, settings masking, reports, audit and Google Sheets preview/send safeguards).
 
 Migration check:
 
@@ -346,7 +364,7 @@ Manual smoke checks completed locally: login, dashboard with live data, customer
 15. Settings/secrets configuration with actionable missing-credential errors.
 16. Production build and single-service static+API serving.
 
-## 13. Known limitations
+## 14. Known limitations
 
 - Real Meta and Razorpay calls were not executed because no live credentials were available; provider-facing code is tested with deterministic mocks and signed webhook payloads. Real approval and delivery depend on your accounts.
 - UPI app chooser works on phones with a UPI app installed. Desktop browsers cannot complete a `upi://pay` link; they show the URI and instructions instead. Meta in-app browser behavior varies by platform, so the redirect page also provides a visible **Open UPI apps** button as a fallback.
@@ -357,7 +375,7 @@ Manual smoke checks completed locally: login, dashboard with live data, customer
 - Payment reconciliation fetches link/payment status on a schedule; extremely delayed provider webhooks still require the admin review flow.
 - This is a single-tenant deployment. Multi-tenant isolation is not implemented.
 
-## 14. Security notes
+## 15. Security notes
 
 - JWT bearer tokens, bcrypt password hashing, rate-limited login.
 - Fernet-encrypted provider secrets; masked settings responses.

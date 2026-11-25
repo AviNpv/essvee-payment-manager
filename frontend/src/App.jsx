@@ -9,6 +9,7 @@ import Messages from './pages/Messages'
 import Imports from './pages/Imports'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
+import Sheets from './pages/Sheets'
 import SystemPage from './pages/System'
 
 function Protected({ children }) {
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/reminders" element={<Reminders />} />
         <Route path="/messages" element={<Messages />} />
         <Route path="/imports" element={<Imports />} />
+        <Route path="/sheets" element={<Sheets />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/system" element={<SystemPage />} />

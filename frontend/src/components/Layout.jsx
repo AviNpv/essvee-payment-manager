@@ -30,6 +30,7 @@ const navigation = [
   { to: '/reminders', label: 'Reminders', icon: BellRing },
   { to: '/messages', label: 'Messages', icon: Receipt },
   { to: '/imports', label: 'Excel Import', icon: Upload },
+  { to: '/sheets', label: 'Google Sheets', icon: FileSpreadsheet },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
   { to: '/settings', label: 'Settings', icon: Settings },
   { to: '/system', label: 'System & Audit', icon: ShieldCheck },

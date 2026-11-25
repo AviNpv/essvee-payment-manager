@@ -12,7 +12,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, customers, excel, pay, payments, reports, settings, system, webhooks, whatsapp
+from app.api import (
+    auth,
+    customers,
+    excel,
+    pay,
+    payments,
+    reports,
+    settings,
+    sheets,
+    system,
+    webhooks,
+    whatsapp,
+)
 from app.core.config import settings as env
 from app.core.errors import AppError, app_error_handler
 from app.db.init_db import init_db
@@ -118,6 +130,7 @@ app.include_router(webhooks.router, prefix="/api")
 app.include_router(pay.router)
 app.include_router(reports.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+app.include_router(sheets.router, prefix="/api")
 app.include_router(system.router, prefix="/api")
 
 
