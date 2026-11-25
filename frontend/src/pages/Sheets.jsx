@@ -88,16 +88,16 @@ export default function Sheets() {
 
   const counts = isPayments
     ? [
-        ['Ready to confirm', preview.eligible_count],
-        ['Matched', preview.matched_count],
-        ['Unmatched', preview.unmatched_count],
-        ['Skipped', preview.invalid_count],
+        ['Ready to confirm', preview?.eligible_count ?? 0],
+        ['Matched', preview?.matched_count ?? 0],
+        ['Unmatched', preview?.unmatched_count ?? 0],
+        ['Skipped', preview?.invalid_count ?? 0],
       ]
     : [
-        ['Ready to send', preview.eligible_count],
-        ['Matched', preview.matched_count],
-        ['Unmatched', preview.unmatched_count],
-        ['Opted out', preview.opted_out_count],
+        ['Ready to send', preview?.eligible_count ?? 0],
+        ['Matched', preview?.matched_count ?? 0],
+        ['Unmatched', preview?.unmatched_count ?? 0],
+        ['Opted out', preview?.opted_out_count ?? 0],
       ]
 
   return (
