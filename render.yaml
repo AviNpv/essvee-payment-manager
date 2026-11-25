@@ -14,10 +14,9 @@ services:
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
+      # Managed manually so an external free PostgreSQL (e.g. Neon) can be used.
       - key: DATABASE_URL
-        fromDatabase:
-          name: essvee-db
-          property: connectionString
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: ENVIRONMENT
