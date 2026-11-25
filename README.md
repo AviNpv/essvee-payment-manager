@@ -253,25 +253,25 @@ Eligibility requires: non-zero outstanding balance, `ACTIVE` status, opt-in cons
 | GitHub repository | https://github.com/AviNpv/essvee-payment-manager |
 | Render Blueprint | `essvee-payment-manager` (ID `exs-dc35m10m7kps73d8o87g`) |
 | Render web service | `essvee-payment-manager` (ID `srv-dc35mdrrjlhs73es4e00`) |
-| Render database | `essvee-db` (ID `dpg-dc35m4jrjlhs73es3gsg-a`) |
-| Region | Oregon (web service and PostgreSQL are in the same region so the private database hostname resolves) |
-| Plan | Render free tier (web service sleeps when idle; free PostgreSQL expires 30 days after creation) |
+| Database | Neon free PostgreSQL — project `essvee-payment-manager` (ID `rapid-union-31926189`), branch `production` (ID `br-flat-sound-aravwqnw`), database `essvee`, Oregon. Permanent free plan: 1 GB storage, 100 CU-hours/month, no expiry. |
+| Region | Oregon (Render web service and Neon database are both in AWS Oregon). |
+| Plan | Render free web service (sleeps when idle; first request can take ~50s) + Neon free PostgreSQL. |
 | UptimeRobot monitor | `ESSVEE Payment Manager - health` (ID `804801244`) — HTTP(S), 5-minute interval, checks `/health` |
 
-The initial Blueprint deployment failed because the web service was created in Singapore while the database was in Oregon. Those resources were removed and recreated with both in Oregon; the live service is verified `Live` and `/health`, `/api/health`, `/docs` and `/` all return HTTP 200.
+The initial Blueprint deployment failed because the web service was created in Singapore while the original Render database was in Oregon. Those resources were removed and recreated in Oregon. The Render database was then replaced with a permanent free Neon PostgreSQL database; `DATABASE_URL` is set manually in Render to the Neon pooled connection string. The live service is verified `Live` and `/health`, `/api/health`, `/docs` and `/` all return HTTP 200.
 
 **Before sending payment reminders:** sign in and open **Settings → UPI** to enter the real UPI ID / VPA. It was intentionally left unset during deployment because it is business-specific; the app shows a configuration screen rather than generating invalid links. Change the generated admin password immediately after first login.
 
 ### Render Blueprint
 
-`render.yaml` provisions a managed PostgreSQL database and a Docker web service. Set `ADMIN_PASSWORD`, `UPI_VPA`, `UPI_PAYEE_NAME`, `PUBLIC_BASE_URL` (your real `https://<service>.onrender.com` address) and all provider secrets in the Render dashboard (marked `sync: false`). After deployment, run migrations once via Render Shell:
+`render.yaml` provisions the Docker web service only. `DATABASE_URL` is a manually managed environment variable pointing to Neon. Set `ADMIN_PASSWORD`, `UPI_VPA`, `UPI_PAYEE_NAME`, `PUBLIC_BASE_URL` (your real `https://<service>.onrender.com` address) and all provider secrets in the Render dashboard (marked `sync: false`). Migrations can be checked via Render Shell:
 
 ```bash
 cd backend
 alembic upgrade head
 ```
 
-The container start command also runs `alembic upgrade head`. Render supplies a `postgres://` URL; the application normalizes it to `postgresql+psycopg://` automatically.
+The container start command also runs `alembic upgrade head`. The application normalizes `postgres://`/`postgresql://` URLs to `postgresql+psycopg://` automatically and uses TLS for Neon.
 
 ### Docker
 

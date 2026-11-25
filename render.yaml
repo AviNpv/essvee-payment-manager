@@ -1,9 +1,4 @@
-databases:
-  - name: essvee-db
-    databaseName: essvee
-    user: essvee
-    plan: free
-
+# Database is managed externally (Neon free PostgreSQL); DATABASE_URL is set manually in Render.
 services:
   - type: web
     name: essvee-payment-manager
