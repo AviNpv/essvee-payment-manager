@@ -49,6 +49,8 @@ from app.models import (
 from app.schemas import (
     CustomerCreate,
     CustomerUpdate,
+    ManualPaymentCreate,
+    SheetPaymentConfirmOut,
     SheetPreviewOut,
     SheetPreviewRequest,
     SheetPreviewRowOut,
@@ -67,6 +69,7 @@ from app.services import (
 
 DAYS = ("Tuesday", "Thursday", "Saturday")
 CUSTOMERS_TAB = "Customers"
+PAYMENTS_TAB = "Customer Details"
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 TOKEN_ISSUER = "essvee-sheets-confirmation"
 TOKEN_TTL_SECONDS = 600
@@ -90,6 +93,16 @@ AMOUNT_ALIASES = (
     "due",
     "dueamount",
 )
+PAID_ALIASES = (
+    "paid amount",
+    "paidamount",
+    "amount paid",
+    "amountpaid",
+    "paid",
+    "payment",
+    "received",
+    "received amount",
+)
 
 REASON_LABELS = {
     "invalid_name": "Invalid name",
@@ -105,7 +118,10 @@ REASON_LABELS = {
     "within_interval": "Within reminder interval",
     "too_early": "New customer inside first-reminder window",
     "zero_balance": "Zero outstanding balance",
+    "no_outstanding": "No outstanding balance to reduce",
+    "exceeds_balance": "Paid amount exceeds outstanding balance",
     "eligible": "Ready to send",
+    "ready": "Ready to confirm",
 }
 
 _TOKEN_CACHE: dict[str, tuple[str, int]] = {}
@@ -452,17 +468,40 @@ def status(db: Session) -> dict[str, Any]:
         "configured": bool(info.get("client_email")),
         "spreadsheet_configured": bool(_extract_spreadsheet_id(credentials["spreadsheet_id"])),
         "service_account_email": info.get("client_email") or None,
-        "tabs": list(DAYS),
+        "tabs": [*DAYS, PAYMENTS_TAB],
+        "reminder_tabs": list(DAYS),
+        "payment_tab": PAYMENTS_TAB,
         "customers_tab": CUSTOMERS_TAB,
     }
+
+
+def history(db: Session, limit: int = 50) -> list[ImportHistory]:
+    """All preview/confirm batches created from Google Sheets, newest first."""
+    return (
+        db.query(ImportHistory)
+        .filter(ImportHistory.file_type == "SHEET")
+        .order_by(ImportHistory.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 def preview(
     db: Session, payload: SheetPreviewRequest, actor: Any = None
 ) -> SheetPreviewOut:
     tab = payload.tab.strip()
+    if tab == PAYMENTS_TAB:
+        return _preview_payments(db, payload, actor)
     if tab not in DAYS:
-        raise ValidationError("Choose one of the configured tabs: " + ", ".join(DAYS))
+        raise ValidationError(
+            "Choose one of the configured tabs: " + ", ".join([*DAYS, PAYMENTS_TAB])
+        )
+    return _preview_reminders(db, payload, actor, tab)
+
+
+def _preview_reminders(
+    db: Session, payload: SheetPreviewRequest, actor: Any, tab: str
+) -> SheetPreviewOut:
     spreadsheet_id = _spreadsheet_id(db, payload.spreadsheet_id)
     header, data_rows = _fetch_values(db, spreadsheet_id, tab)
     name_col = _find_column(header, NAME_ALIASES)
@@ -587,6 +626,7 @@ def preview(
         import_id=batch.id,
         tab=tab,
         spreadsheet_id=spreadsheet_id,
+        kind="reminders",
         row_count=len(rows),
         matched_count=matched_count,
         unmatched_count=reason_counts.get("unmatched", 0),
@@ -626,7 +666,14 @@ def confirm_send(
     )
     if not rows:
         raise ValidationError("This preview has no eligible rows to send")
+    kind = str((batch.summary or {}).get("kind") or "reminders")
+    if kind != "reminders":
+        raise ValidationError(
+            "This preview is not a reminder preview; use Confirm Payments for Customer Details rows"
+        )
     tab = str((batch.summary or {}).get("tab") or "")
+    if tab not in DAYS:
+        raise ValidationError("This preview is not a reminder preview")
     _validate_token(payload.confirmation_token, batch.id, [row.id for row in rows], tab)
 
     if reminder_service.is_quiet_hours(db):
@@ -761,3 +808,331 @@ def confirm_send(
             f"{sent} reminder(s) sent, {failed} failed, {skipped} skipped."
         ),
     )
+
+
+def _preview_payments(
+    db: Session, payload: SheetPreviewRequest, actor: Any
+) -> SheetPreviewOut:
+    """Preview payments pasted into the Customer Details tab.
+
+    This never changes a balance. Every valid row is recorded as a pending
+    payment preview and only becomes a confirmed payment after the administrator
+    presses Confirm Payments.
+    """
+    spreadsheet_id = _spreadsheet_id(db, payload.spreadsheet_id)
+    header, data_rows = _fetch_values(db, spreadsheet_id, PAYMENTS_TAB)
+    name_col = _find_column(header, NAME_ALIASES)
+    paid_col = _find_column(header, PAID_ALIASES)
+    if not name_col or not paid_col:
+        raise ValidationError(
+            f"The {PAYMENTS_TAB} tab needs a Name column and a Paid Amount column"
+        )
+
+    directory, warnings = read_directory(db, spreadsheet_id)
+    sync_stats = sync_directory(db, directory, actor)
+
+    batch = ImportHistory(
+        filename=f"Google Sheets: {PAYMENTS_TAB}",
+        file_type="SHEET",
+        mode=ImportMode.ADJUSTMENT.value,
+        status=ImportStatus.PREVIEWED.value,
+        row_count=len(data_rows),
+        created_by=getattr(actor, "id", None),
+        summary={
+            "tab": PAYMENTS_TAB,
+            "spreadsheet_id": spreadsheet_id,
+            "kind": "payments",
+        },
+    )
+    db.add(batch)
+    db.flush()
+
+    rows: list[SheetPreviewRowOut] = []
+    reason_counts: dict[str, int] = {}
+    matched_count = 0
+    for row_number, raw in data_rows:
+        name = _clean_name(raw.get(name_col))
+        paid, amount_error = _parse_amount(raw.get(paid_col))
+        customer: Customer | None = None
+        phone: str | None = None
+        current: Decimal | None = None
+        difference: Decimal | None = None
+        balance_after: Decimal | None = None
+        pending_payment_id: UUID | None = None
+        reason = "ready"
+
+        if len(name) < 2:
+            reason = "invalid_name"
+        elif amount_error:
+            reason = "invalid_amount"
+        else:
+            entry = directory.get(_name_key(name))
+            if not entry:
+                reason = "unmatched"
+            else:
+                phone = entry["phone"]
+                customer = customer_service.get_by_phone(db, phone)
+                if not customer:
+                    reason = "unmatched"
+                else:
+                    matched_count += 1
+                    current = balance_service.decimals(customer.outstanding_balance)
+                    if current <= 0:
+                        reason = "no_outstanding"
+                    elif paid is not None and paid > current:
+                        reason = "exceeds_balance"
+                    else:
+                        pending = (
+                            db.query(Payment)
+                            .filter(
+                                Payment.customer_id == customer.id,
+                                Payment.status == PaymentStatus.AWAITING_CONFIRMATION.value,
+                            )
+                            .order_by(Payment.created_at)
+                            .all()
+                        )
+                        if pending:
+                            pending_payment_id = pending[0].id
+                            matching = next(
+                                (
+                                    item
+                                    for item in pending
+                                    if balance_service.decimals(item.amount) == paid
+                                ),
+                                None,
+                            )
+                            if matching:
+                                # Confirm the already-verified gateway payment; never
+                                # record a second payment for the same collection.
+                                pending_payment_id = matching.id
+                                difference = -paid
+                                balance_after = current - paid
+                            else:
+                                reason = "awaiting_confirmation"
+                        else:
+                            difference = -paid
+                            balance_after = current - paid
+
+        breakdown_key = reason
+        reason_counts[breakdown_key] = reason_counts.get(breakdown_key, 0) + 1
+        valid = reason == "ready"
+        rows.append(
+            SheetPreviewRowOut(
+                row_number=row_number,
+                name=name or "(blank)",
+                phone=phone,
+                amount=paid,
+                current_balance=current,
+                difference=difference,
+                balance_after=balance_after,
+                status="VALID" if valid else reason[:20],
+                reason=reason,
+                customer_id=customer.id if customer and (valid or pending_payment_id) else None,
+                pending_payment_id=pending_payment_id,
+                error=None if valid else REASON_LABELS.get(reason, reason),
+            )
+        )
+        db.add(
+            ImportRow(
+                import_id=batch.id,
+                row_number=row_number,
+                name=name or None,
+                raw_phone=phone,
+                normalized_phone=phone,
+                amount=paid,
+                status="VALID" if valid else reason[:20],
+                error=None if valid else REASON_LABELS.get(reason, reason),
+                matched_customer_id=customer.id if customer and valid else None,
+                current_balance=current,
+                difference=difference,
+            )
+        )
+
+    eligible_count = sum(1 for row in rows if row.status == "VALID")
+    batch.valid_count = eligible_count
+    batch.invalid_count = len(rows) - eligible_count
+    batch.summary = {
+        "tab": PAYMENTS_TAB,
+        "spreadsheet_id": spreadsheet_id,
+        "kind": "payments",
+        "matched": matched_count,
+        "unmatched": reason_counts.get("unmatched", 0),
+        "reason_breakdown": reason_counts,
+        "directory": sync_stats,
+        "directory_warnings": warnings,
+    }
+    batch.errors = warnings
+    db.commit()
+
+    eligible_row_ids = [
+        row.id
+        for row in db.query(ImportRow)
+        .filter(ImportRow.import_id == batch.id, ImportRow.status == "VALID")
+        .order_by(ImportRow.row_number)
+        .all()
+    ]
+    return SheetPreviewOut(
+        import_id=batch.id,
+        tab=PAYMENTS_TAB,
+        spreadsheet_id=spreadsheet_id,
+        kind="payments",
+        row_count=len(rows),
+        matched_count=matched_count,
+        unmatched_count=reason_counts.get("unmatched", 0),
+        opted_out_count=0,
+        eligible_count=eligible_count,
+        invalid_count=len(rows) - eligible_count,
+        reason_breakdown=reason_counts,
+        rows=rows,
+        confirmation_token=_issue_token(batch.id, eligible_row_ids, PAYMENTS_TAB),
+        quiet_hours=reminder_service.is_quiet_hours(db),
+        directory_created=sync_stats["created"],
+        directory_updated=sync_stats["updated"],
+        warnings=warnings,
+    )
+
+
+def confirm_payments(
+    db: Session, payload: SheetSendRequest, actor: Any = None
+) -> SheetPaymentConfirmOut:
+    """Admin-confirm payments from a Customer Details preview."""
+    batch = (
+        db.query(ImportHistory)
+        .filter(ImportHistory.id == payload.import_id, ImportHistory.file_type == "SHEET")
+        .first()
+    )
+    if not batch:
+        raise NotFoundError("Sheet preview not found")
+    if (batch.summary or {}).get("kind") != "payments":
+        raise ValidationError("This preview is not a Customer Details payment preview")
+    if batch.status == ImportStatus.COMPLETED.value:
+        raise ConflictError("This sheet preview has already been confirmed")
+    if batch.status != ImportStatus.PREVIEWED.value:
+        raise ConflictError("This sheet preview can no longer be confirmed")
+
+    rows = (
+        db.query(ImportRow)
+        .filter(ImportRow.import_id == batch.id, ImportRow.status == "VALID")
+        .order_by(ImportRow.row_number)
+        .all()
+    )
+    if not rows:
+        raise ValidationError("This preview has no eligible payments to confirm")
+    _validate_token(payload.confirmation_token, batch.id, [row.id for row in rows], PAYMENTS_TAB)
+
+    confirmed = skipped = 0
+    total = Decimal("0.00")
+    for row in rows:
+        customer = db.get(Customer, row.matched_customer_id) if row.matched_customer_id else None
+        paid = balance_service.decimals(row.amount)
+        if not customer:
+            row.status = "SKIPPED"
+            row.error = "Customer no longer exists"
+            skipped += 1
+            continue
+
+        current = balance_service.decimals(customer.outstanding_balance)
+        if current <= 0:
+            row.status = "SKIPPED"
+            row.error = REASON_LABELS["no_outstanding"]
+            skipped += 1
+            continue
+        if paid > current:
+            row.status = "SKIPPED"
+            row.error = REASON_LABELS["exceeds_balance"]
+            skipped += 1
+            continue
+
+        pending = (
+            db.query(Payment)
+            .filter(
+                Payment.customer_id == customer.id,
+                Payment.status == PaymentStatus.AWAITING_CONFIRMATION.value,
+            )
+            .order_by(Payment.created_at)
+            .all()
+        )
+        matching = next(
+            (item for item in pending if balance_service.decimals(item.amount) == paid),
+            None,
+        )
+        if pending and not matching:
+            row.status = "SKIPPED"
+            row.error = REASON_LABELS["awaiting_confirmation"]
+            skipped += 1
+            continue
+
+        if matching:
+            payment = matching
+        else:
+            payment = payment_service.create_manual(
+                db,
+                ManualPaymentCreate(
+                    customer_id=customer.id,
+                    amount=paid,
+                    method="OTHER",
+                    reference=f"SHEET:{batch.id}:{row.row_number}",
+                    notes=f"Paid amount pasted in {PAYMENTS_TAB} tab",
+                    payment_date=datetime.now(timezone.utc),
+                ),
+                actor=actor,
+            )
+        payment_service.confirm(db, payment.id, actor=actor, send_confirmation=True)
+        row.status = "CONFIRMED"
+        row.error = None
+        confirmed += 1
+        total += paid
+
+    summary = dict(batch.summary or {})
+    summary.update(
+        {
+            "confirmed": confirmed,
+            "skipped": skipped,
+            "total_amount": str(total),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    batch.status = ImportStatus.COMPLETED.value
+    batch.imported_count = confirmed
+    batch.updated_count = confirmed
+    batch.invalid_count = skipped
+    batch.summary = summary
+    db.commit()
+    audit_service.log(
+        db,
+        action="sheets.payments.confirm",
+        entity_type="SHEET_IMPORT",
+        entity_id=str(batch.id),
+        after={
+            "tab": PAYMENTS_TAB,
+            "confirmed": confirmed,
+            "skipped": skipped,
+            "total_amount": str(total),
+        },
+        actor_id=getattr(actor, "id", None),
+        actor_email=getattr(actor, "email", None),
+        commit=True,
+    )
+    return SheetPaymentConfirmOut(
+        import_id=batch.id,
+        status=batch.status,
+        confirmed_count=confirmed,
+        skipped_count=skipped,
+        total_amount=total,
+        message=(
+            f"Confirmed {confirmed} payment(s) totalling {total}; "
+            f"{skipped} row(s) skipped. Outstanding balances are updated."
+        ),
+    )
+
+
+def reject_pending_payment(
+    db: Session, payment_id: UUID, reason: str, actor: Any = None
+) -> Payment:
+    """Reject a verified webhook payment from the Sheets review screen."""
+    payment = db.get(Payment, payment_id)
+    if not payment:
+        raise NotFoundError("Pending payment not found")
+    if payment.status != PaymentStatus.AWAITING_CONFIRMATION.value:
+        raise ConflictError("Only payments awaiting confirmation can be rejected")
+    return payment_service.reject(db, payment_id, reason, actor=actor)

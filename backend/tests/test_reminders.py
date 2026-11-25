@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -75,55 +76,42 @@ def test_bulk_preview_token_required(db, customer):
         reminder_service.validate_confirmation_token("not-a-token")
 
 
-def test_bulk_send_api_uses_preview_token(client, db, customer):
+def test_bulk_send_uses_preview_token(db, customer):
     config = settings_service.get_reminder(db)
     config.first_reminder_after_days = 0
     db.commit()
-    preview = client.post("/api/whatsapp/reminders/preview", json={"respect_quiet_hours": False})
-    assert preview.status_code == 200
-    body = preview.json()
-    assert body["eligible_count"] == 1
-    assert body["total_outstanding"] == "5000.00"
+    preview = reminder_service.preview(db, BulkPreviewRequest(respect_quiet_hours=False))
+    assert preview["eligible_count"] == 1
+    assert preview["total_outstanding"] == Decimal("5000.00")
 
-    forbidden = client.post(
-        "/api/whatsapp/reminders/bulk", json={"confirmation_token": "invalid", "customer_ids": [str(customer.id)]}
-    )
-    assert forbidden.status_code == 422
+    with pytest.raises(Exception, match="invalid or has expired"):
+        reminder_service.send_bulk(db, "invalid", [customer.id])
 
-    result = client.post(
-        "/api/whatsapp/reminders/bulk", json={"confirmation_token": body["confirmation_token"]}
-    )
-    assert result.status_code == 200
-    assert result.json() == {"sent": 1, "failed": 0, "skipped": 0}
+    result = reminder_service.send_bulk(db, preview["confirmation_token"])
+    assert result == {"sent": 1, "failed": 0, "skipped": 0}
     db.refresh(customer)
     assert customer.reminder_count == 1
     assert customer.last_reminder_at is not None
 
 
-def test_bulk_send_rejects_untargeted_customer(client, db, customer):
+def test_bulk_send_rejects_untargeted_customer(db, customer):
     config = settings_service.get_reminder(db)
     config.first_reminder_after_days = 0
     db.commit()
-    token = client.post("/api/whatsapp/reminders/preview", json={}).json()["confirmation_token"]
+    token = reminder_service.preview(db, BulkPreviewRequest())["confirmation_token"]
     other = add_customer(db, "Other", "9876543211")
-    response = client.post(
-        "/api/whatsapp/reminders/bulk",
-        json={"confirmation_token": token, "customer_ids": [str(other.id)]},
-    )
-    assert response.status_code == 422
+    with pytest.raises(Exception, match="not part of the preview"):
+        reminder_service.send_bulk(db, token, [other.id])
 
 
-def test_bulk_send_blocked_in_quiet_hours(client, db, customer, monkeypatch):
+def test_bulk_send_blocked_in_quiet_hours(db, customer, monkeypatch):
     config = settings_service.get_reminder(db)
     config.first_reminder_after_days = 0
     db.commit()
-    token = client.post(
-        "/api/whatsapp/reminders/preview", json={"respect_quiet_hours": False}
-    ).json()["confirmation_token"]
+    token = reminder_service.preview(db, BulkPreviewRequest(respect_quiet_hours=False))["confirmation_token"]
     monkeypatch.setattr(reminder_service, "is_quiet_hours", lambda db: True)
-    response = client.post("/api/whatsapp/reminders/bulk", json={"confirmation_token": token})
-    assert response.status_code == 422
-    assert "Quiet hours" in response.json()["error"]["message"]
+    with pytest.raises(Exception, match="Quiet hours"):
+        reminder_service.send_bulk(db, token)
 
 
 def test_automation_disabled_job_is_skipped(client, db, customer):

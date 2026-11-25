@@ -5,8 +5,8 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import {
-  AlertTriangle, ArrowRight, BellRing, CheckCircle2, CreditCard, Download,
-  Link2, Plus, Receipt, TrendingUp, Upload, Users, Wallet,
+  AlertTriangle, ArrowRight, BellRing, CheckCircle2, Download, FileSpreadsheet,
+  Plus, Receipt, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import api, { download, errMsg } from '../lib/api'
 import { useToast } from '../lib/Toast'
@@ -30,10 +30,9 @@ export default function Dashboard() {
   const { stats, charts } = data
   const quickActions = [
     { label: 'Add customer', icon: Plus, to: '/customers?new=1' },
-    { label: 'Upload Excel', icon: Upload, to: '/imports' },
-    { label: 'Send reminder', icon: BellRing, to: '/reminders' },
-    { label: 'Generate link', icon: Link2, to: '/customers' },
-    { label: 'Verify payment', icon: CheckCircle2, to: '/payments?tab=AWAITING_CONFIRMATION' },
+    { label: 'Google Sheets', icon: FileSpreadsheet, to: '/sheets' },
+    { label: 'Send reminders', icon: Receipt, to: '/sheets?tab=Tuesday' },
+    { label: 'Confirm payments', icon: CheckCircle2, to: '/sheets?tab=Customer%20Details' },
     { label: 'Export report', icon: Download, action: async () => {
       try { await download('/reports/export', { report: 'collections', format: 'xlsx' }, 'post'); toast.success('Report downloaded') }
       catch (e) { toast.error(errMsg(e)) }
@@ -50,8 +49,8 @@ export default function Dashboard() {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total outstanding" value={inr(stats.total_outstanding)} icon={Wallet} hint={`${num(stats.customers_with_outstanding)} customers pending`} to="/customers?outstanding=pending" />
-        <StatCard label="Confirmed collections" value={inr(stats.total_collected)} icon={TrendingUp} tone="green" hint="All-time confirmed payments" to="/payments?tab=CONFIRMED" />
-        <StatCard label="Pending verification" value={inr(stats.pending_amount)} icon={Receipt} tone="amber" hint={`${num(stats.pending_count)} payment(s) awaiting review`} to="/payments?tab=AWAITING_CONFIRMATION" />
+        <StatCard label="Confirmed collections" value={inr(stats.total_collected)} icon={TrendingUp} tone="green" hint="All-time confirmed payments" />
+        <StatCard label="Pending verification" value={inr(stats.pending_amount)} icon={Receipt} tone="amber" hint={`${num(stats.pending_count)} payment(s) awaiting review`} />
         <StatCard label="Total customers" value={num(stats.total_customers)} icon={Users} tone="blue" hint="Registered customers" to="/customers" />
       </div>
 
@@ -137,7 +136,7 @@ export default function Dashboard() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader title="Awaiting verification" subtitle="Payments detected automatically — review before approval" action={<button className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => navigate('/payments?tab=AWAITING_CONFIRMATION')}>View all <ArrowRight className="inline h-3 w-3" /></button>} />
+          <CardHeader title="Awaiting verification" subtitle="Webhook payments — review before approval" action={<button className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => navigate('/sheets?tab=Customer%20Details')}>Open Sheets <ArrowRight className="inline h-3 w-3" /></button>} />
           {data.awaiting_verification.length ? (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {data.awaiting_verification.map((payment) => (
@@ -153,7 +152,7 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-          ) : <EmptyState icon={CheckCircle2} title="Nothing to verify" description="New Razorpay payments will appear here." />}
+          ) : <EmptyState icon={CheckCircle2} title="Nothing to verify" description="Verified Razorpay payments will appear here until you approve them." />}
         </Card>
         <Card>
           <CardHeader title="Highest outstanding balances" action={<button className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => navigate('/customers?outstanding=pending')}>View all <ArrowRight className="inline h-3 w-3" /></button>} />
@@ -167,7 +166,7 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-          ) : <EmptyState icon={Wallet} title="No outstanding balances" description="Import customers to get started." />}
+          ) : <EmptyState icon={Wallet} title="No outstanding balances" description="Add customers in the Customers tab of the linked Google Sheet, then paste amounts into a day tab." />}
         </Card>
       </div>
 
@@ -199,7 +198,7 @@ export default function Dashboard() {
           ) : <EmptyState icon={BellRing} title="No messages yet" />}
         </Card>
         <Card>
-          <CardHeader title="Failed reminders" subtitle="Retry from the Messages page" />
+          <CardHeader title="Failed reminders" subtitle="Re-preview the day tab in Google Sheets to retry" />
           {data.failed_reminders.length ? (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {data.failed_reminders.map((m) => (

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  Archive, BellRing, Ban, ChevronDown, CreditCard, Eye, FileText, Link2,
-  MoreHorizontal, Pencil, Plus, Receipt, Search, Trash2, UserPlus, Users,
+  Archive, Ban, ChevronDown, Eye, FileText, MoreHorizontal, Pencil, Plus,
+  Search, Trash2, UserPlus, Users,
 } from 'lucide-react'
 import api, { errMsg } from '../lib/api'
 import { useToast } from '../lib/Toast'
@@ -30,7 +30,6 @@ export default function Customers() {
   const [history, setHistory] = useState(null)
   const [action, setAction] = useState(null)
   const [amount, setAmount] = useState('')
-  const [reference, setReference] = useState('')
   const [notes, setNotes] = useState('')
   const toast = useToast()
 
@@ -79,16 +78,7 @@ export default function Customers() {
     setBusy(true)
     try {
       const customer = action.customer
-      if (action.type === 'reminder') {
-        const r = await api.post('/whatsapp/reminders/send', { customer_id: customer.id })
-        toast.success(r.data.status === 'FAILED' ? `Message failed: ${r.data.error}` : 'Reminder sent')
-      } else if (action.type === 'link') {
-        await api.post('/payment-links/generate', { customer_id: customer.id })
-        toast.success('Payment link ready'); window.open('/#/customers', '_self')
-      } else if (action.type === 'payment') {
-        await api.post('/payments/manual', { customer_id: customer.id, amount: Number(amount), method: 'CASH', reference, notes })
-        toast.success('Payment recorded — awaiting confirmation')
-      } else if (action.type === 'adjust') {
+      if (action.type === 'adjust') {
         await api.post(`/customers/${customer.id}/adjustments`, { amount: Number(amount), transaction_type: 'ADJUSTMENT', description: notes || 'Manual adjustment' })
         toast.success('Balance adjusted')
       } else if (action.type === 'exclude') {
@@ -104,25 +94,17 @@ export default function Customers() {
         await api.put(`/customers/${customer.id}`, { consent_status: customer.consent_status === 'OPT_IN' ? 'OPT_OUT' : 'OPT_IN' })
         toast.success('Consent updated')
       }
-      setAction(null); setAmount(''); setReference(''); setNotes(''); load()
+      setAction(null); setAmount(''); setNotes(''); load()
       if (detail) openDetail({ ...customer })
     } catch (e) { toast.error(errMsg(e)) } finally { setBusy(false) }
   }
 
-  const needsAmount = ['payment', 'adjust'].includes(action?.type)
+  const needsAmount = action?.type === 'adjust'
 
   return (
     <div className="space-y-5">
       <PageHeader title="Customers" subtitle="Manage customer records, WhatsApp consent and outstanding balances" actions={
-        <>
-          <button className="btn-secondary" onClick={() => {
-            api.get('/excel/template', { responseType: 'blob' }).then((r) => {
-              const url = URL.createObjectURL(new Blob([r.data])); const a = document.createElement('a')
-              a.href = url; a.download = 'essvee_customer_template.xlsx'; a.click(); URL.revokeObjectURL(url)
-            })
-          }}>Template</button>
-          <button className="btn-primary" onClick={() => { setEditing(null); setForm({ ...blank }); setParams({}) }}><Plus className="h-4 w-4" /> Add customer</button>
-        </>
+        <button className="btn-primary" onClick={() => { setEditing(null); setForm({ ...blank }); setParams({}) }}><Plus className="h-4 w-4" /> Add customer</button>
       } />
 
       <Card>
@@ -136,7 +118,7 @@ export default function Customers() {
           </select>
         </div>
         {loading ? <Loading /> : rows.length === 0 ? (
-          <EmptyState icon={Users} title="No customers found" description="Add a customer manually or import an Excel file to get started." action={<button className="btn-primary" onClick={() => setForm({ ...blank })}><UserPlus className="h-4 w-4" /> Add customer</button>} />
+          <EmptyState icon={Users} title="No customers found" description="Add a customer manually, or paste names and mobile numbers into the Customers tab of the linked Google Sheet." action={<button className="btn-primary" onClick={() => setForm({ ...blank })}><UserPlus className="h-4 w-4" /> Add customer</button>} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px]">
@@ -162,11 +144,6 @@ export default function Customers() {
                     <td className="td"><div className="flex flex-wrap gap-1"><span className={`badge ${statusTone(customer.status)}`}>{pretty(customer.status)}</span>{customer.exclude_from_reminders && <Badge tone="amber">Excluded</Badge>}</div></td>
                     <td className="td"><div className="flex justify-end gap-0.5">
                       <button className="btn-ghost p-1.5" title="View history" onClick={() => openDetail(customer)}><Eye className="h-4 w-4" /></button>
-                      <button className="btn-ghost p-1.5" title="Send reminder" onClick={() => setAction({ type: 'reminder', customer })}><BellRing className="h-4 w-4" /></button>
-                      <button className="btn-ghost p-1.5" title="Generate payment link" onClick={async () => {
-                        try { const r = await api.post('/payment-links/generate', { customer_id: customer.id }); window.open(r.data.url, '_blank', 'noopener'); toast.success('Payment link opened') } catch (e) { toast.error(errMsg(e)) }
-                      }}><Link2 className="h-4 w-4" /></button>
-                      <button className="btn-ghost p-1.5" title="Record payment" onClick={() => setAction({ type: 'payment', customer })}><Receipt className="h-4 w-4" /></button>
                       <button className="btn-ghost p-1.5" title="Edit" onClick={() => { setEditing(customer); setForm({ ...customer, opening_balance: customer.opening_balance }) }}><Pencil className="h-4 w-4" /></button>
                       <button className="btn-ghost p-1.5" title="More actions" onClick={() => setAction({ type: 'exclude', customer })}><MoreHorizontal className="h-4 w-4" /></button>
                     </div></td>
@@ -204,9 +181,6 @@ export default function Customers() {
             ))}
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary" onClick={() => setAction({ type: 'reminder', customer: detail })}><BellRing className="h-4 w-4" /> Send reminder</button>
-            <button className="btn-secondary" onClick={async () => { try { const r = await api.post('/payment-links/generate', { customer_id: detail.id }); window.open(r.data.url, '_blank', 'noopener'); toast.success('Payment link opened') } catch (e) { toast.error(errMsg(e)) } }}><Link2 className="h-4 w-4" /> Payment link</button>
-            <button className="btn-secondary" onClick={() => setAction({ type: 'payment', customer: detail })}><CreditCard className="h-4 w-4" /> Record payment</button>
             <button className="btn-secondary" onClick={() => setAction({ type: 'adjust', customer: detail })}><FileText className="h-4 w-4" /> Adjust balance</button>
             <button className="btn-secondary" onClick={() => setAction({ type: 'consent', customer: detail })}>{detail.consent_status === 'OPT_IN' ? <Ban className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />} {detail.consent_status === 'OPT_IN' ? 'Opt out' : 'Opt in'}</button>
             <button className="btn-secondary" onClick={() => setAction({ type: 'exclude', customer: detail })}><Ban className="h-4 w-4" /> {detail.exclude_from_reminders ? 'Include' : 'Exclude'} reminders</button>
@@ -238,14 +212,10 @@ export default function Customers() {
         busy={busy}
         danger={action?.type === 'delete' || action?.type === 'archive'}
         title={({
-          reminder: 'Send WhatsApp reminder', link: 'Generate payment link', payment: 'Record manual payment',
           adjust: 'Adjust outstanding balance', exclude: 'Change reminder exclusion', archive: 'Archive customer',
           delete: 'Delete customer', consent: 'Change WhatsApp consent',
         })[action?.type] || 'Confirm action'}
         description={({
-          reminder: 'A unique Razorpay link will be reused or created and an approved template message sent to this customer.',
-          link: 'Create a fresh Razorpay payment link for the current outstanding balance?',
-          payment: 'Record a payment. It will remain AWAITING_CONFIRMATION until an administrator approves it.',
           adjust: 'Create a ledger adjustment entry for this customer.',
           exclude: 'Toggle whether this customer is excluded from automated reminders.',
           archive: 'Archived customers stop receiving reminders. Financial history is preserved.',
@@ -256,8 +226,7 @@ export default function Customers() {
       >
         {needsAmount && <div className="mt-4 space-y-3">
           <Field label="Amount (₹)"><input className="input" type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
-          {action.type === 'payment' && <Field label="Reference (optional)"><input className="input" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / receipt number" /></Field>}
-          <Field label="Notes"><input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={action.type === 'adjust' ? 'Reason for adjustment' : 'Optional'} /></Field>
+          <Field label="Notes"><input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Reason for adjustment" /></Field>
         </div>}
       </ConfirmDialog>
     </div>

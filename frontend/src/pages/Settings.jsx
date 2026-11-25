@@ -139,7 +139,7 @@ export default function Settings() {
         <Card><CardHeader title="How Pay Now works" subtitle="WhatsApp button → HTTPS redirect → UPI app" /><div className="space-y-2 p-5 text-sm text-slate-600 dark:text-slate-300">
           <p>1. The approved WhatsApp template button opens <code className="rounded bg-slate-100 px-1 py-0.5 text-xs dark:bg-slate-800">{form.upi.public_base_url || 'https://your-domain.com'}/pay/…</code>.</p>
           <p>2. That page immediately opens <code className="rounded bg-slate-100 px-1 py-0.5 text-xs dark:bg-slate-800">upi://pay?…</code>, so the phone shows GPay, PhonePe, Paytm and other installed UPI apps.</p>
-          <p>3. With “Customer enters amount”, the UPI app does not force an amount. The customer pays what they want and shares the UTR; your team confirms the real payment in Payments.</p>
+          <p>3. With “Customer enters amount”, the UPI app does not force an amount. The customer pays what they want and shares the UTR; your team confirms the real payment from the Customer Details tab in Google Sheets.</p>
           <p className="text-xs text-slate-400">Need Razorpay instead? Choose “Razorpay Payment Link” above and configure Razorpay credentials.</p>
         </div></Card>
       </>}

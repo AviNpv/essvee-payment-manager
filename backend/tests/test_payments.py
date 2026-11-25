@@ -6,6 +6,9 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import pytest
+
+from app.core.errors import ConflictError, ValidationError
 from app.models import (
     BalanceTransaction,
     MessageStatus,
@@ -16,7 +19,10 @@ from app.models import (
     TransactionEffect,
     TransactionType,
     WebhookEvent,
+    WhatsAppMessage,
 )
+from app.schemas import CustomerCreate, ManualPaymentCreate
+from app.services import customer_service, payment_service, settings_service
 
 
 def signed_webhook(client, payload: dict, secret: str = "test_webhook_secret"):
@@ -46,89 +52,73 @@ def gateway_payload(customer_id, amount=250000, payment_id=None, event="payment.
     }
 
 
-def test_manual_payment_requires_confirmation(client, db, customer):
-    response = client.post(
-        "/api/payments/manual",
-        json={"customer_id": str(customer.id), "amount": 2000, "method": "CASH", "reference": "RCPT-1"},
-    )
-    assert response.status_code == 201
-    payment = response.json()
-    assert payment["status"] == PaymentStatus.AWAITING_CONFIRMATION.value
-    assert Decimal(payment["amount"]) == Decimal("2000.00")
+def make_payment(db, customer, amount, admin, **overrides):
+    data = {"customer_id": customer.id, "amount": amount}
+    data.update(overrides)
+    return payment_service.create_manual(db, ManualPaymentCreate(**data), actor=admin)
+
+
+def test_manual_payment_requires_confirmation(db, customer, admin):
+    payment = make_payment(db, customer, 2000, admin, method="CASH", reference="RCPT-1")
+    assert payment.status == PaymentStatus.AWAITING_CONFIRMATION.value
+    assert Decimal(payment.amount) == Decimal("2000.00")
 
     db.refresh(customer)
     assert customer.outstanding_balance == Decimal("5000.00")
     assert customer.total_paid == Decimal("0.00")
 
-    confirmed = client.post(f"/api/payments/{payment['id']}/confirm")
-    assert confirmed.status_code == 200
-    assert Decimal(confirmed.json()["balance_after"]) == Decimal("3000.00")
+    payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
 
     db.refresh(customer)
     assert customer.outstanding_balance == Decimal("3000.00")
     assert customer.total_paid == Decimal("2000.00")
-    txn = db.query(BalanceTransaction).filter(BalanceTransaction.payment_id == UUID(payment["id"])).one()
+    txn = db.query(BalanceTransaction).filter(BalanceTransaction.payment_id == payment.id).one()
     assert txn.transaction_type == TransactionType.PAYMENT.value
     assert txn.effect == TransactionEffect.DECREASE.value
     assert txn.balance_after == Decimal("3000.00")
 
 
-def test_confirmation_sends_message_but_never_financial_rollback(client, db, customer):
-    payment = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 1000}
-    ).json()
-    result = client.post(f"/api/payments/{payment['id']}/confirm")
-    assert result.status_code == 200
-    assert result.json()["message_status"] == MessageStatus.SENT.value
-    messages = client.get(f"/api/whatsapp/messages?customer_id={customer.id}").json()
-    assert messages["total"] == 1
-    assert messages["items"][0]["message_type"] == "CONFIRMATION"
+def test_confirmation_sends_message_but_never_financial_rollback(db, customer, admin):
+    payment = make_payment(db, customer, 1000, admin)
+    result = payment_service.confirm(db, payment.id, actor=admin)
+    assert result["message_status"] == MessageStatus.SENT.value
+    messages = db.query(WhatsAppMessage).filter(WhatsAppMessage.customer_id == customer.id).all()
+    assert len(messages) == 1
+    assert messages[0].message_type == "CONFIRMATION"
 
 
-def test_double_confirmation_rejected(client, customer):
-    payment = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 1000}
-    ).json()
-    client.post(f"/api/payments/{payment['id']}/confirm")
-    second = client.post(f"/api/payments/{payment['id']}/confirm")
-    assert second.status_code == 409
+def test_double_confirmation_rejected(db, customer, admin):
+    payment = make_payment(db, customer, 1000, admin)
+    payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
+    with pytest.raises(ConflictError):
+        payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
 
 
-def test_reject_does_not_change_balance(client, db, customer):
-    payment = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 1000}
-    ).json()
-    response = client.post(
-        f"/api/payments/{payment['id']}/reject", json={"reason": "Amount was entered incorrectly"}
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == PaymentStatus.REJECTED.value
+def test_reject_does_not_change_balance(db, customer, admin):
+    payment = make_payment(db, customer, 1000, admin)
+    rejected = payment_service.reject(db, payment.id, "Amount was entered incorrectly", actor=admin)
+    assert rejected.status == PaymentStatus.REJECTED.value
     db.refresh(customer)
     assert customer.outstanding_balance == Decimal("5000.00")
     assert db.query(BalanceTransaction).count() == 1  # opening balance only
 
 
-def test_overpayment_cannot_make_balance_negative(client, db, customer):
-    payment = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 6000}
-    ).json()
-    result = client.post(f"/api/payments/{payment['id']}/confirm")
-    assert result.status_code == 409
+def test_overpayment_cannot_make_balance_negative(db, customer, admin):
+    payment = make_payment(db, customer, 6000, admin)
+    with pytest.raises(ConflictError, match="negative"):
+        payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
+    db.refresh(payment)
+    assert payment.status == PaymentStatus.AWAITING_CONFIRMATION.value
     db.refresh(customer)
     assert customer.outstanding_balance == Decimal("5000.00")
     assert db.query(Payment).filter(Payment.status == PaymentStatus.CONFIRMED.value).count() == 0
 
 
-def test_reversal_restores_balance_with_ledger_entry(client, db, customer):
-    payment = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 2000}
-    ).json()
-    client.post(f"/api/payments/{payment['id']}/confirm")
-    response = client.post(
-        f"/api/payments/{payment['id']}/reverse", json={"reason": "Bank returned the transaction"}
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == PaymentStatus.REVERSED.value
+def test_reversal_restores_balance_with_ledger_entry(db, customer, admin):
+    payment = make_payment(db, customer, 2000, admin)
+    payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
+    reversed_payment = payment_service.reverse(db, payment.id, "Bank returned the transaction", actor=admin)
+    assert reversed_payment.status == PaymentStatus.REVERSED.value
     db.refresh(customer)
     assert customer.outstanding_balance == Decimal("5000.00")
     reversal = (
@@ -153,7 +143,7 @@ def test_webhook_signature_is_enforced(client, db):
     assert db.query(Payment).count() == 0
 
 
-def test_webhook_creates_pending_payment_only(client, db, customer):
+def test_webhook_creates_pending_payment_only(client, db, customer, admin):
     payload = gateway_payload(customer.id, payment_id="pay_webhook_1")
     response = signed_webhook(client, payload)
     assert response.status_code == 200
@@ -170,8 +160,7 @@ def test_webhook_creates_pending_payment_only(client, db, customer):
     assert duplicate.json()["status"] == "duplicate"
     assert db.query(Payment).count() == 1
 
-    confirmed = client.post(f"/api/payments/{payment.id}/confirm")
-    assert confirmed.status_code == 200
+    payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
     db.refresh(customer)
     assert customer.outstanding_balance == Decimal("2500.00")
 
@@ -194,57 +183,39 @@ def test_webhook_for_unknown_customer_is_skipped(client, db):
     assert db.query(Payment).count() == 0
 
 
-def test_payment_link_is_reused_and_replaced(client, db, customer):
-    first = client.post(
-        "/api/payment-links/generate", json={"customer_id": str(customer.id)}
-    )
-    assert first.status_code == 201
-    reused = client.post(
-        "/api/payment-links/generate", json={"customer_id": str(customer.id)}
-    )
-    assert reused.status_code == 201
-    assert reused.json()["id"] == first.json()["id"]
+def test_payment_link_is_reused_and_replaced(db, customer, admin):
+    first = payment_service.ensure_payment_link(db, customer, actor=admin)
+    reused = payment_service.ensure_payment_link(db, customer, actor=admin)
+    assert reused.id == first.id
 
-    replaced = client.post(
-        "/api/payment-links/generate", json={"customer_id": str(customer.id), "force_new": True}
-    )
-    assert replaced.status_code == 201
-    assert replaced.json()["id"] != first.json()["id"]
-    old = db.get(PaymentLink, UUID(first.json()["id"]))
+    replaced = payment_service.ensure_payment_link(db, customer, force_new=True, actor=admin)
+    assert replaced.id != first.id
+    old = db.get(PaymentLink, first.id)
     assert old.status == PaymentLinkStatus.CANCELLED.value
     assert db.query(PaymentLink).count() == 2
 
 
-def test_link_requires_balance_and_credentials(client, db, customer):
-    client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 5000}
-    )
-    paid = db.query(Payment).one()
-    client.post(f"/api/payments/{paid.id}/confirm")
-    response = client.post(
-        "/api/payment-links/generate", json={"customer_id": str(customer.id)}
-    )
-    assert response.status_code == 422
-
-    from app.services import settings_service
+def test_link_requires_balance_and_credentials(db, customer, admin):
+    payment = make_payment(db, customer, 5000, admin)
+    payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
+    with pytest.raises(ValidationError, match="zero-balance"):
+        payment_service.ensure_payment_link(db, customer, actor=admin)
 
     settings_service.set_value(db, "upi_vpa", "")
-    new_customer = client.post(
-        "/api/customers",
-        json={"name": "Second Customer", "whatsapp_number": "9876543211", "opening_balance": 1000},
-    ).json()
-    missing = client.post(
-        "/api/payment-links/generate", json={"customer_id": new_customer["id"]}
+    new_customer = customer_service.create(
+        db,
+        CustomerCreate(
+            name="Second Customer", whatsapp_number="9876543211", opening_balance=1000
+        ),
+        actor=admin,
     )
-    assert missing.status_code == 409
-    assert "not configured" in missing.json()["error"]["message"]
+    with pytest.raises(Exception, match="not configured"):
+        payment_service.ensure_payment_link(db, new_customer, actor=admin)
 
 
-def test_expired_links_are_flagged_by_reconcile(client, db, customer):
-    link = client.post(
-        "/api/payment-links/generate", json={"customer_id": str(customer.id)}
-    ).json()
-    row = db.get(PaymentLink, UUID(link["id"]))
+def test_expired_links_are_flagged_by_reconcile(client, db, customer, admin):
+    link = payment_service.ensure_payment_link(db, customer, actor=admin)
+    row = db.get(PaymentLink, link.id)
     row.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
     db.commit()
     result = client.post("/api/scheduler/run?job=reconcile")

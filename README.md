@@ -7,7 +7,7 @@ A private, admin-controlled payment collection application. Customers are tracke
 ## 1. What this system does
 
 - Maintains customers, phone numbers, consent and outstanding balances.
-- Imports Excel/CSV customer balances with preview, validation and audit trail.
+- Uses one Google Sheets workflow: day tabs set outstanding balances and send Pay Now reminders; the `Customer Details` tab records paid amounts. Every batch is previewed first and applied only after explicit admin confirmation.
 - Creates and reuses payment links for the configured provider:
   - **UPI (default):** HTTPS redirect → `upi://pay` → phone shows installed UPI apps; amount may be entered by the customer.
   - **Razorpay (optional):** official hosted Razorpay Payment Link for the outstanding balance.
@@ -36,23 +36,23 @@ ESSVEE PAYMENT COLLECTION/
 │   ├── migrations/             # Initial schema revision 638b1677c532
 │   ├── requirements.txt
 │   ├── pytest.ini
-│   ├── tests/                  # 70 automated tests
+│   ├── tests/                  # 68 automated tests
 │   ├── smoke_test.py           # Manual backend end-to-end smoke script
 │   └── app/
-│       ├── api/                # auth, customers, excel, sheets, pay, payments,
-│       │                       # whatsapp, webhooks, reports, settings, system routers
+│       ├── api/                # auth, customers, sheets, pay, webhooks, reports,
+│       │                       # settings, system routers
 │       ├── core/               # config, security, errors, rate limiting
 │       ├── db/                 # engine/session and bootstrap seed
 │       ├── models/entities.py  # All ORM tables
 │       ├── schemas/__init__.py # Pydantic request/response models
 │       ├── services/           # balance, customer, payment, upi, razorpay, whatsapp,
-│       │                       # reminder, excel, sheets, reports, settings, audit
+│       │                       # reminder, sheets, reports, settings, export, audit
 │       ├── templates/whatsapp_templates.json
 │       └── main.py             # FastAPI app, scheduler, CORS, SPA fallback
 └── frontend/
     ├── src/
-    │   ├── pages/              # Login, Dashboard, Customers, Payments, Reminders,
-    │   │                       # Messages, Imports, Sheets, Reports, Settings, System
+    │   ├── pages/              # Login, Dashboard, Customers, Sheets, Reports,
+    │   │                       # Settings, System
     │   ├── components/         # Layout/sidebar/theme, UI primitives
     │   ├── lib/                # Axios client, formatting, toasts
     │   └── App.jsx             # Routes and auth guard
@@ -129,7 +129,7 @@ All IDs are UUIDs. Every money column is `Numeric(16, 2)` mapped to Python `Deci
 | `webhook_events` | Provider, event ID, raw payload, signature validity, processing status/error. |
 | `reminder_settings` | Automation pause, frequency/interval, maximum reminders, daily limit, quiet hours, templates, retry/link/payment policy. |
 | `app_settings` | Encrypted configuration values (Fernet derived from `SECRET_KEY`). |
-| `import_history`, `import_rows` | Excel batch metadata, per-row validation and balance differences. |
+| `import_history`, `import_rows` | Google Sheets batch metadata, per-row validation, intended balance differences and confirmation audit trail. |
 | `audit_logs` | Actor, action, entity, before/after JSON, IP and user agent. |
 | `scheduler_runs` | Job name, start/finish, status, processed/failed counts, details. |
 
@@ -155,29 +155,13 @@ All endpoints except `/health`, `/api/health` and webhooks require `Authorizatio
 | POST | `/api/customers/{id}/toggle-exclusion` | Exclude/include from reminders. |
 | GET | `/api/customers/{id}/history` | Ledger/payment/message history. |
 | POST | `/api/customers/{id}/adjustments` | CHARGE or ADJUSTMENT ledger entry. |
-| POST | `/api/excel/preview` | Upload XLSX/CSV and validate rows. |
-| POST | `/api/excel/import` | Confirm preview with explicit confirmation. |
-| GET | `/api/excel/template` | Download import template. |
-| GET | `/api/excel/export` | Export customers XLSX/CSV. |
-| GET | `/api/excel/imports` | Import history. |
 | GET | `/api/sheets/status` | Google credentials/spreadsheet status and required tab names. |
-| POST | `/api/sheets/preview` | Read a day tab, sync Customers directory, classify rows, issue token. |
-| POST | `/api/sheets/send` | Explicit token-gated balance updates + approved Pay Now reminders. |
-| GET | `/api/payments` | List/filter payments. |
-| POST | `/api/payments/manual` | Create payment awaiting confirmation. |
-| POST | `/api/payments/{id}/confirm` | **Explicit admin approval**; changes balance. |
-| POST | `/api/payments/{id}/reject` | Reject without balance change. |
-| POST | `/api/payments/{id}/reverse` | Reverse confirmed payment with ledger entry. |
-| GET | `/api/payment-links` | Recent links. |
-| POST | `/api/payment-links/generate` | Create/reuse/force-new link for the active provider. |
-| POST | `/api/payment-links/{id}/cancel` | Cancel link. |
-| POST | `/api/whatsapp/reminders/send` | Send one reminder using an approved template. |
-| POST | `/api/whatsapp/reminders/preview` | Bulk preview with counts and 10-minute confirmation token. |
-| POST | `/api/whatsapp/reminders/bulk` | Bulk send; token mandatory. |
-| GET | `/api/whatsapp/messages` | Message history. |
-| POST | `/api/whatsapp/messages/{id}/retry` | Retry failed message. |
-| GET | `/api/whatsapp/templates` | Template definitions to submit to Meta. |
-| POST | `/api/whatsapp/test` | Connection test. |
+| POST | `/api/sheets/preview` | Read a day tab or `Customer Details`, sync the Customers directory, classify rows, issue a 10-minute token. |
+| POST | `/api/sheets/send` | Explicit token-gated balance updates + approved Pay Now reminders for a day tab. |
+| POST | `/api/sheets/confirm-payments` | Explicit token-gated approval of `Customer Details` payments; changes balances. |
+| POST | `/api/sheets/pending-payments/{id}/reject` | Reject a verified webhook payment from the Sheets review screen; no balance change. |
+| GET | `/api/sheets/history` | Sheet preview/confirmation history. |
+| POST | `/api/reports/export` | Export customers XLSX/CSV. |
 | GET/POST | `/api/webhooks/whatsapp` | Meta verification, statuses, STOP/opt-out. |
 | POST | `/api/webhooks/razorpay` | HMAC-verified payment events → pending payments (Razorpay mode). |
 | GET | `/pay/{token}` | Public UPI redirect used by the WhatsApp Pay Now button. |
@@ -229,7 +213,7 @@ Secrets entered in the Settings UI are stored encrypted in `app_settings`; the A
 4. Keep **Customer enters amount** so the UPI app opens without a fixed amount and the customer pays what they want. Choose **Pre-fill outstanding amount** only if you want the app to suggest the exact balance.
 5. Use **Check setup** to validate the configuration without sending anything.
 6. Flow: WhatsApp **Pay Now** → `https://<domain>/pay/<token>` → automatic `upi://pay?pa=…&pn=…` redirect → phone displays GPay, PhonePe, Paytm and other installed UPI apps.
-7. UPI deep links do **not** notify this server about payments. The customer shares the UTR, and your team records it in **Payments → Record payment** with method `UPI` and the UTR as reference. Balances change only after an administrator clicks **CONFIRM**.
+7. UPI deep links do **not** notify this server about payments. The customer shares the UTR, and your team enters the amount in the **`Customer Details`** sheet tab (`Name`, `Paid Amount`). Balances change only after an administrator previews the rows and clicks **Confirm Payments**.
 
 ### Razorpay (optional)
 
@@ -238,26 +222,29 @@ Secrets entered in the Settings UI are stored encrypted in `app_settings`; the A
 3. Set `RAZORPAY_MODE=live` only after live credentials and live webhook secret are configured.
 4. Payment Links are created through `POST /payment_links` with `notes.customer_id`, amount in paise, currency INR and optional callback URL/partial payment settings.
 5. Webhook signatures are verified with HMAC-SHA256 before processing. Invalid attempts are stored for audit and return 401. Captured/failed webhooks create pending/failed payment rows; they **never** update balances.
-6. Do not trust the browser return URL: the admin confirms payments explicitly in **Payments**.
+6. Do not trust the browser return URL: verified webhook payments stay `AWAITING_CONFIRMATION`; the admin confirms a matching amount from **`Customer Details`** in Google Sheets or rejects it from the same review screen.
 7. To switch back to Razorpay at any time, set **Settings → UPI → Payment provider** to `Razorpay Payment Link`; existing active links are cancelled when a new link is generated.
 
-## 9. Google Sheets reminders
+## 9. Google Sheets workflow
 
-Use the **Google Sheets** page to turn a daily worksheet into audited, preview-first Pay Now reminders. No invoice is created at any point.
+The **Google Sheets** page is the only operational workflow. No invoice is created at any point.
 
 1. In Google Cloud, enable the **Google Sheets API** and create a service account. Generate a JSON key and store the **entire JSON** as the Render secret `GOOGLE_SERVICE_ACCOUNT_JSON` (or in Settings → Google Sheets for local use). Never commit or paste the key into chat.
 2. Share the spreadsheet with the service account's `…iam.gserviceaccount.com` email as **Viewer**. Paste the spreadsheet URL into **Settings → Google Sheets** so the app extracts the spreadsheet ID.
-3. The workbook must contain tabs **`Tuesday`**, **`Thursday`** and **`Saturday`**, each with **`Name`** and **`Amount`** columns. Add a **`Customers`** tab with **`Name`** and **`Mobile`** (or `Phone` / `WhatsApp Number`) columns as the predefined name → number directory.
-4. Click **Preview rows**. The app syncs the Customers directory into the database (names/numbers only — consent, status, exclusions and balances are untouched), joins each row by name, and classifies it as ready, unmatched, opted out, inactive, excluded, awaiting review, outside the reminder interval, or invalid.
-5. Review matched/unmatched/opted-out counts and the exact balance changes. Nothing is sent at preview time.
-6. Click **Confirm Send** to issue a short-lived confirmation token, then explicitly approve. On confirmation only: the sheet `Amount` becomes the customer's outstanding balance through an `ADJUSTMENT` ledger entry, a Pay Now link is generated/reused, and one approved reminder template is sent via WhatsApp Cloud API.
-7. Quiet hours, daily limits, consent/opt-out, active status, reminder interval and maximum are rechecked at send time. Replaying a confirmed preview is rejected with HTTP 409. Every sync, balance change, link and message is written to the audit log.
+3. The workbook must contain:
+   - **`Customers`** with `Name` and `Mobile` (or `Phone` / `WhatsApp Number`) — the name → number directory.
+   - **`Tuesday`**, **`Thursday`**, **`Saturday`** with `Name` and `Amount` — outstanding balances and Pay Now reminders.
+   - **`Customer Details`** with exactly `Name` and `Paid Amount` — payments received.
+4. Choose a tab and click **Preview rows**. The app syncs the Customers directory into the database (names/numbers only — consent, status, exclusions and balances are untouched), joins rows by name, and shows matched/unmatched/opted-out/skipped counts with the exact balance effect. Nothing changes and nothing is sent at preview time.
+5. For a day tab, click **Confirm Send** after review. Only then does the sheet `Amount` become the outstanding balance through an `ADJUSTMENT` ledger entry, a Pay Now link get generated/reused, and one approved reminder template go out via WhatsApp Cloud API. For explicit sheet sends, a zero balance is overridden by the sheet amount and the first-reminder window is allowed; consent, status, exclusion, pending review, interval, maximum and daily limit are still enforced.
+6. For `Customer Details`, click **Confirm Payments** after review. Each valid row creates an audited payment and reduces the outstanding balance; no negative balance is allowed. If a verified Razorpay webhook is already awaiting confirmation for the same customer and amount, that payment is confirmed instead of creating a duplicate. A mismatched pending amount is blocked, and **Reject** can be used without changing the balance.
+7. A short-lived token ties Confirm to the exact previewed rows. Replaying a confirmed preview is rejected with HTTP 409. Quiet hours block reminder sends at confirmation time. Every sync, balance change, payment and message is written to the audit log.
 
 The service account only needs read access. The app signs a short-lived JWT locally and calls the Sheets REST API directly — there is no browser automation or scraping, and no Google credential is ever returned to the frontend. A missing key, missing spreadsheet ID or unshared sheet produces a clear configuration error instead of a fake success.
 
 ## 10. Reminder rules
 
-Eligibility requires: non-zero outstanding balance, `ACTIVE` status, opt-in consent, not excluded, no awaiting-confirmation payment, no reminder within the configured interval, under `max_reminders`, outside quiet hours, and within the global daily limit. Manual and bulk sends reuse a payment link per customer to preserve idempotency. Bulk send requires a preview token containing the eligible IDs (10-minute expiry); targeting an ID not in the token is rejected. Automation is off by default and can be paused at any time.
+Day-tab sheet sends reuse a payment link per customer to preserve idempotency. The sheet amount deliberately overrides a zero balance and the first-reminder window; every other guard is enforced: `ACTIVE` status, opt-in consent, not excluded, no awaiting-confirmation payment, no reminder within the configured interval, under `max_reminders`, outside quiet hours at confirmation, and within the global daily limit. Confirmation requires a 10-minute token tied to the exact previewed rows. Scheduled automation is off by default and can be paused at any time.
 
 ## 11. Deployment
 
@@ -300,15 +287,15 @@ The root `Dockerfile` builds the Vite app, copies `frontend/dist` into the Pytho
 | Phase | Delivered | Verification |
 | --- | --- | --- |
 | 1 – Foundation | Config, security, errors, rate limiting, DB session, ORM models, Alembic. | Initial migration applied and Alembic check clean. |
-| 2 – Schemas/services | Pydantic schemas plus audit, settings, balance, customer, payment, provider, reminder, Excel and report services. | Service unit coverage and smoke checks. |
-| 3 – Customer/import APIs | Customer CRUD/history/adjustments, Excel preview/import/export. | Customer/Excel tests, template download smoke check. |
-| 4 – Payment APIs | Manual entries, confirm/reject/reverse, UPI app-chooser links, Razorpay links/cancel, signed webhooks. | Payment/UPI/webhook/idempotency tests. |
-| 5 – WhatsApp | Approved template payloads, consent, opt-out, statuses, idempotency, history, rate limits. | WhatsApp tests with deterministic provider mocks. |
-| 6 – Reminders | Eligibility engine, preview tokens, bulk send, quiet hours, scheduler jobs. | Reminder/scheduler tests. |
+| 2 – Schemas/services | Pydantic schemas plus audit, settings, balance, customer, payment, provider, reminder, Sheets and report services. | Service unit coverage and smoke checks. |
+| 3 – Customer APIs | Customer CRUD/history/adjustments; directory sync from the Google Sheets `Customers` tab. | Customer and Sheets directory tests. |
+| 4 – Payment services | Manual/webhook entries, explicit confirm/reject/reverse, UPI app-chooser links, signed webhooks. | Payment/UPI/webhook/idempotency tests. |
+| 5 – WhatsApp | Approved template payloads, consent, opt-out, statuses, idempotency, rate limits. | WhatsApp tests with deterministic provider mocks. |
+| 6 – Sheets reminders | Eligibility engine, preview tokens, explicit send, quiet hours, audit trail. | Sheets preview/send tests. |
 | 7 – Reports/audit | Dashboard, report tables/exports, audit logs, webhook events, scheduler runs. | Reports/settings/audit tests. |
-| 8 – Frontend | Auth, dashboard, customers, payments, reminders, messages, imports, reports, settings, system pages. | `npm run build`; authenticated UI walkthrough with no console errors. |
+| 8 – Frontend | Auth, dashboard, customers, one Google Sheets workflow, reports, settings, system pages. | `npm run build`; authenticated UI walkthrough with no console errors. |
 | 9 – Deployment | Dockerfile, Compose, Render Blueprint, `.env.example`, `.gitignore`. | Files validated by inspection; Docker unavailable locally. |
-| 10 – Final hardening | Decimal-only exports, UTC datetime normalization, masked settings, UPI app chooser, final tests/docs. | 70 tests pass; migration check clean; single-service static/API serving returns 200. |
+| 10 – Final hardening | Decimal-only exports, UTC datetime normalization, masked settings, UPI app chooser, Sheets-only workflow, final tests/docs. | 68 tests pass; migration check clean; single-service static/API serving returns 200. |
 
 ## 13. Tests and verification results
 
@@ -321,7 +308,7 @@ $env:SECRET_KEY = 'pytest-secret-key-do-not-use-in-production'
 & "..\.venv\Scripts\python.exe" -m pytest tests -q --disable-warnings
 ```
 
-Result in this build environment: **70 passed** (including customers, Excel import/reconciliation, payments, UPI deep links/redirect/app chooser, signed webhooks and idempotency, link reuse/cancel, WhatsApp templates/consent/status/opt-out, bulk preview tokens, scheduler jobs, auth, settings masking, reports, audit and Google Sheets preview/send safeguards).
+Result in this build environment: **68 passed** (including customers, Google Sheets preview/send/payment confirmation, signed webhooks and idempotency, UPI deep links/redirect/app chooser, WhatsApp templates/consent/status/opt-out, preview tokens, scheduler jobs, auth, settings masking, reports and audit).
 
 Migration check:
 
@@ -341,34 +328,30 @@ npm install --no-audit --no-fund
 npm run build
 ```
 
-Result: build succeeded (2,061 modules transformed).
+Result: build succeeds (2,058 modules transformed).
 
-Manual smoke checks completed locally: login, dashboard with live data, customer create/history/adjustment/exclusion, Excel template, reports, settings, scheduler/audit views, bulk preview, backend `smoke_test.py` covering UPI setup check → UPI link → HTTPS `/pay/<token>` redirect containing `upi://pay` → UPI payment recorded from UTR → confirm → balance recompute. `confirm` reports `message_status=FAILED` when WhatsApp credentials are absent, while the financial confirmation still commits — by design. Browser verification confirmed the new **Settings → UPI** form renders and the `/pay/<token>` page attempts a `upi://pay?pa=…&pn=…&cu=INR` navigation while showing a visible **Open UPI apps** fallback and the customer-enters-amount note. No browser console errors were observed during the authenticated UI walkthrough.
+Manual smoke checks completed locally: login, dashboard, customer create/history/adjustment/exclusion, reports, settings, scheduler/audit views and the Sheets status/history endpoints. Backend `smoke_test.py` covers UPI setup check → link → HTTPS `/pay/<token>` redirect containing `upi://pay` → internal payment confirm → balance recompute. Browser verification confirmed the **Settings → UPI** form renders and the `/pay/<token>` page attempts a `upi://pay?pa=…&pn=…&cu=INR` navigation while showing a visible **Open UPI apps** fallback and the customer-enters-amount note.
 
 ### Acceptance workflow coverage
 
 1. Admin login and session guard.
-2. Customer create/edit with normalized WhatsApp number.
-3. Excel template/download, preview, validation and import.
-4. Balance adjustments with append-only ledger.
-5. UPI link generation/reuse/cancel; Pay Now opens `https://…/pay/<token>` which launches the UPI app chooser with a customer-entered amount.
+2. Customer create/edit and `Customers` tab directory sync with normalized WhatsApp numbers.
+3. Google Sheets day-tab preview, balance adjustment ledger and explicit Pay Now send.
+4. `Customer Details` preview, explicit payment confirmation and balance reduction.
+5. UPI link generation/reuse; Pay Now opens `https://…/pay/<token>` which launches the UPI app chooser with a customer-entered amount.
 6. Approved-template reminder with Pay Now URL.
 7. Consent and opt-out enforcement.
-8. Bulk preview counts and explicit confirmation token.
-9. UPI UTR recorded as a pending payment; Razorpay signed webhook ingestion and idempotency (when Razorpay is selected).
-10. Manual payment entry awaiting confirmation.
-11. Explicit admin confirm/reject/reverse.
-12. Dashboard and collections/outstanding reports.
-13. Message history and status callbacks.
-14. Scheduler runs and audit/webhook views.
-15. Settings/secrets configuration with actionable missing-credential errors.
-16. Production build and single-service static+API serving.
+8. Signed Razorpay webhook ingestion, idempotency and matching webhook confirmation/rejection.
+9. Dashboard and collections/outstanding reports.
+10. Message status callbacks and audit/webhook views.
+11. Scheduler runs and settings/secrets configuration with actionable missing-credential errors.
+12. Production build and single-service static+API serving.
 
 ## 14. Known limitations
 
 - Real Meta and Razorpay calls were not executed because no live credentials were available; provider-facing code is tested with deterministic mocks and signed webhook payloads. Real approval and delivery depend on your accounts.
 - UPI app chooser works on phones with a UPI app installed. Desktop browsers cannot complete a `upi://pay` link; they show the URI and instructions instead. Meta in-app browser behavior varies by platform, so the redirect page also provides a visible **Open UPI apps** button as a fallback.
-- UPI deep links cannot verify or notify payments. The customer must share the UTR and an administrator must record/confirm it.
+- UPI deep links cannot verify or notify payments. The customer must share the UTR and an administrator must enter it in `Customer Details` and confirm it.
 - Docker was unavailable locally; the Compose/Render files were not run here.
 - The bootstrap admin password is a documented default and must be changed after first login.
 - `get_settings()` is cached at process start; environment changes require an application restart.

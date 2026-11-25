@@ -315,9 +315,11 @@ class SheetPreviewRowOut(BaseModel):
     amount: Decimal | None = None
     current_balance: Decimal | None = None
     difference: Decimal | None = None
+    balance_after: Decimal | None = None
     status: str
     reason: str
     customer_id: UUID | None = None
+    pending_payment_id: UUID | None = None
     error: str | None = None
 
 
@@ -325,6 +327,7 @@ class SheetPreviewOut(BaseModel):
     import_id: UUID
     tab: str
     spreadsheet_id: str
+    kind: str = "reminders"
     row_count: int
     matched_count: int
     unmatched_count: int
@@ -351,6 +354,15 @@ class SheetSendOut(BaseModel):
     updated_count: int
     sent_count: int
     failed_count: int
+    skipped_count: int
+    total_amount: Decimal
+    message: str
+
+
+class SheetPaymentConfirmOut(BaseModel):
+    import_id: UUID
+    status: str
+    confirmed_count: int
     skipped_count: int
     total_amount: Decimal
     message: str

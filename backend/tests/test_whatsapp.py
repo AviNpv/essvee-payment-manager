@@ -1,10 +1,29 @@
 import hashlib
 import hmac
 import json
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+import pytest
+
+from app.core.errors import ValidationError
 from app.models import ConsentStatus, MessageStatus, WhatsAppMessage
-from app.services import settings_service, whatsapp_service
+from app.schemas import CustomerCreate
+from app.services import customer_service, payment_service, settings_service, whatsapp_service
+
+
+def _send_reminder(db, customer, admin):
+    """Exercise the same internal reminder path used by confirmed sheet sends."""
+    link = payment_service.ensure_payment_link(db, customer, actor=admin)
+    before = whatsapp_service.existing_message_ids(db, customer.id)
+    message = whatsapp_service.send_reminder(
+        db, customer, link.url, idempotency_suffix=f"manual:{link.id}"
+    )
+    if message.status != MessageStatus.FAILED.value and message.id not in before:
+        customer.reminder_count += 1
+        customer.last_reminder_at = datetime.now(timezone.utc)
+        db.commit()
+    return message
 
 
 def signed_meta_webhook(client, payload, secret="test_app_secret"):
@@ -41,41 +60,32 @@ def inbound_payload(text, message_id=None):
     }
 
 
-def test_templates_endpoint_lists_three_approved_templates(client):
-    response = client.get("/api/whatsapp/templates")
-    assert response.status_code == 200
-    names = [template["name"] for template in response.json()["templates"]]
+def test_templates_lists_three_approved_templates():
+    names = [template["name"] for template in whatsapp_service.template_definitions()["templates"]]
     assert names == ["payment_reminder", "payment_confirmation", "partial_payment_reminder"]
 
 
-def test_reminder_requires_opt_in(client, db, customer):
+def test_reminder_requires_opt_in(db, customer, admin):
     customer.consent_status = ConsentStatus.OPT_OUT.value
     db.commit()
-    response = client.post(
-        "/api/whatsapp/reminders/send", json={"customer_id": str(customer.id)}
-    )
-    assert response.status_code == 422
-    assert "opted in" in response.json()["error"]["message"]
+    with pytest.raises(ValidationError, match="opted in|not opted in"):
+        _send_reminder(db, customer, admin)
     assert db.query(WhatsAppMessage).count() == 0
 
 
-def test_reminder_is_idempotent_for_same_link(client, db, customer):
-    first = client.post("/api/whatsapp/reminders/send", json={"customer_id": str(customer.id)})
-    assert first.status_code == 200
-    assert first.json()["status"] == MessageStatus.SENT.value
-    assert first.json()["customer_name"] == customer.name
-    second = client.post("/api/whatsapp/reminders/send", json={"customer_id": str(customer.id)})
-    assert second.json()["id"] == first.json()["id"]
+def test_reminder_is_idempotent_for_same_link(db, customer, admin):
+    first = _send_reminder(db, customer, admin)
+    assert first.status == MessageStatus.SENT.value
+    second = _send_reminder(db, customer, admin)
+    assert second.id == first.id
     assert db.query(WhatsAppMessage).count() == 1
     db.refresh(customer)
     assert customer.reminder_count == 1
     assert customer.last_reminder_at is not None
 
 
-def test_reminder_contains_pay_now_button_and_rendered_preview(client, db, customer):
-    response = client.post("/api/whatsapp/reminders/send", json={"customer_id": str(customer.id)})
-    assert response.status_code == 200
-    message = db.get(WhatsAppMessage, UUID(response.json()["id"]))
+def test_reminder_contains_pay_now_button_and_rendered_preview(db, customer, admin):
+    message = _send_reminder(db, customer, admin)
     assert message.template_name == "payment_reminder"
     assert "/pay/" in message.button_url
     assert "5,000.00" in message.body_preview
@@ -147,26 +157,23 @@ def test_delivery_status_webhook_updates_message(client, db, customer):
     assert message.delivered_at is not None
 
 
-def test_rate_limit_blocks_excess_daily_messages(client, db, customer):
+def test_rate_limit_blocks_excess_daily_messages(db, customer, admin):
     config = settings_service.get_reminder(db)
     config.daily_limit = 1
     db.commit()
-    first = client.post("/api/whatsapp/reminders/send", json={"customer_id": str(customer.id)})
-    assert first.status_code == 200
-    other = client.post(
-        "/api/customers",
-        json={"name": "Another Customer", "whatsapp_number": "9876543211", "opening_balance": 1000},
-    ).json()
-    second = client.post("/api/whatsapp/reminders/send", json={"customer_id": other["id"]})
-    assert second.status_code == 422
-    assert "limit" in second.json()["error"]["message"]
+    _send_reminder(db, customer, admin)
+    other = customer_service.create(
+        db,
+        CustomerCreate(name="Another Customer", whatsapp_number="9876543211", opening_balance=1000),
+        actor=admin,
+    )
+    with pytest.raises(ValidationError, match="limit"):
+        _send_reminder(db, other, admin)
 
 
-def test_missing_credentials_do_not_fake_success(client, db, customer):
+def test_missing_credentials_do_not_fake_success(db, customer, admin):
     settings_service.set_value(db, "whatsapp_access_token", "")
-    response = client.post("/api/whatsapp/reminders/send", json={"customer_id": str(customer.id)})
-    assert response.status_code == 200  # message record exists but is marked FAILED
-    assert response.json()["status"] == MessageStatus.FAILED.value
-    message = db.get(WhatsAppMessage, UUID(response.json()["id"]))
+    message = _send_reminder(db, customer, admin)
+    assert message.status == MessageStatus.FAILED.value
     assert "not configured" in message.error
     assert whatsapp_service.is_configured(db) is False

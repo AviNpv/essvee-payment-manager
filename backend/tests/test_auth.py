@@ -25,7 +25,7 @@ def test_protected_endpoint_requires_token(db):
     with TestClient(app) as anonymous:
         assert anonymous.get("/api/customers").status_code == 401
         assert anonymous.get("/api/reports/dashboard").status_code == 401
-        assert anonymous.post("/api/payments/manual", json={}).status_code == 401
+        assert anonymous.get("/api/sheets/status").status_code == 401
 
 
 def test_invalid_token_rejected(db):

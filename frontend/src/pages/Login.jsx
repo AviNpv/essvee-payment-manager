@@ -42,7 +42,7 @@ export default function Login() {
             reminders and administrator-verified collections.
           </p>
           <div className="mt-12 grid max-w-md grid-cols-2 gap-3">
-            {['Excel balance import', 'Razorpay payment links', 'Approved WhatsApp templates', 'Audited payment approval'].map((item) => (
+            {['Google Sheets balance sync', 'Pay Now UPI links', 'Approved WhatsApp templates', 'Audited payment approval'].map((item) => (
               <div key={item} className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs font-medium text-brand-50">
                 <ShieldCheck className="mb-2 h-4 w-4 text-emerald-300" />
                 {item}

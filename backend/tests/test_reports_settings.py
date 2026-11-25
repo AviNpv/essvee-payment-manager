@@ -2,7 +2,8 @@ from decimal import Decimal
 
 from app.core.security import mask_secret
 from app.models import AuditLog
-from app.services import settings_service
+from app.schemas import ManualPaymentCreate
+from app.services import payment_service, settings_service
 
 
 def test_settings_credentials_are_masked_and_masked_values_are_unchanged(client, db):
@@ -53,15 +54,17 @@ def test_health_endpoints(client):
     assert api.json()["razorpay_mode"] in ("test", "live")
 
 
-def test_dashboard_and_reports_reflect_confirmed_payments_only(client, customer):
-    pending = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 1500}
-    ).json()
+def test_dashboard_and_reports_reflect_confirmed_payments_only(client, db, customer, admin):
+    pending = payment_service.create_manual(
+        db,
+        ManualPaymentCreate(customer_id=customer.id, amount=1500),
+        actor=admin,
+    )
     before = client.get("/api/reports/dashboard").json()
     assert Decimal(before["stats"]["total_collected"]) == Decimal("0.00")
     assert Decimal(before["stats"]["pending_amount"]) == Decimal("1500.00")
 
-    client.post(f"/api/payments/{pending['id']}/confirm")
+    payment_service.confirm(db, pending.id, actor=admin, send_confirmation=False)
     after = client.get("/api/reports/dashboard").json()
     assert Decimal(after["stats"]["total_collected"]) == Decimal("1500.00")
     assert Decimal(after["stats"]["pending_amount"]) == Decimal("0.00")
@@ -82,13 +85,15 @@ def test_report_exports(client, customer):
         assert magic in response.content[:200] if fmt == "xlsx" else magic in response.content
 
 
-def test_audit_log_is_attached_to_financial_actions(client, customer):
-    payment = client.post(
-        "/api/payments/manual", json={"customer_id": str(customer.id), "amount": 500}
-    ).json()
-    client.post(f"/api/payments/{payment['id']}/confirm")
+def test_audit_log_is_attached_to_financial_actions(client, db, customer, admin):
+    payment = payment_service.create_manual(
+        db,
+        ManualPaymentCreate(customer_id=customer.id, amount=500),
+        actor=admin,
+    )
+    payment_service.confirm(db, payment.id, actor=admin, send_confirmation=False)
     logs = client.get("/api/audit-logs").json()
     actions = {entry["action"] for entry in logs}
     assert {"payment.manual_entry", "payment.confirm"}.issubset(actions)
     entries = client.get("/api/audit-logs?limit=500").json()
-    assert any(item["entity_id"] == payment["id"] for item in entries)
+    assert any(item["entity_id"] == str(payment.id) for item in entries)

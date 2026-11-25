@@ -3,10 +3,6 @@ import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Customers from './pages/Customers'
-import Payments from './pages/Payments'
-import Reminders from './pages/Reminders'
-import Messages from './pages/Messages'
-import Imports from './pages/Imports'
 import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import Sheets from './pages/Sheets'
@@ -24,10 +20,6 @@ export default function App() {
       <Route element={<Protected><Layout /></Protected>}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/customers" element={<Customers />} />
-        <Route path="/payments" element={<Payments />} />
-        <Route path="/reminders" element={<Reminders />} />
-        <Route path="/messages" element={<Messages />} />
-        <Route path="/imports" element={<Imports />} />
         <Route path="/sheets" element={<Sheets />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />

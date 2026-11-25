@@ -15,15 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from app.api import (
     auth,
     customers,
-    excel,
     pay,
-    payments,
     reports,
     settings,
     sheets,
     system,
     webhooks,
-    whatsapp,
 )
 from app.core.config import settings as env
 from app.core.errors import AppError, app_error_handler
@@ -123,9 +120,6 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(customers.router, prefix="/api")
-app.include_router(excel.router, prefix="/api")
-app.include_router(payments.router, prefix="/api")
-app.include_router(whatsapp.router, prefix="/api")
 app.include_router(webhooks.router, prefix="/api")
 app.include_router(pay.router)
 app.include_router(reports.router, prefix="/api")
