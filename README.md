@@ -2,6 +2,8 @@
 
 A private, admin-controlled payment collection application. Customers are tracked by **outstanding balance** (never by invoices); approved WhatsApp templates carry a **Pay Now** button. By default the button opens an HTTPS redirect that launches the customer's UPI app chooser (GPay, PhonePe, Paytm, etc.), where the customer can enter the amount they want to pay. Razorpay Payment Links remain available as an optional provider. No card/UPI secrets are collected or stored.
 
+**Live app:** https://essvee-payment-manager.onrender.com · **Source:** https://github.com/AviNpv/essvee-payment-manager
+
 ## 1. What this system does
 
 - Maintains customers, phone numbers, consent and outstanding balances.
@@ -240,6 +242,25 @@ Secrets entered in the Settings UI are stored encrypted in `app_settings`; the A
 Eligibility requires: non-zero outstanding balance, `ACTIVE` status, opt-in consent, not excluded, no awaiting-confirmation payment, no reminder within the configured interval, under `max_reminders`, outside quiet hours, and within the global daily limit. Manual and bulk sends reuse a payment link per customer to preserve idempotency. Bulk send requires a preview token containing the eligible IDs (10-minute expiry); targeting an ID not in the token is rejected. Automation is off by default and can be paused at any time.
 
 ## 10. Deployment
+
+### Live deployment (current)
+
+| Item | Value |
+| --- | --- |
+| Application | https://essvee-payment-manager.onrender.com |
+| Health check | https://essvee-payment-manager.onrender.com/health |
+| API health | https://essvee-payment-manager.onrender.com/api/health |
+| GitHub repository | https://github.com/AviNpv/essvee-payment-manager |
+| Render Blueprint | `essvee-payment-manager` (ID `exs-dc35m10m7kps73d8o87g`) |
+| Render web service | `essvee-payment-manager` (ID `srv-dc35mdrrjlhs73es4e00`) |
+| Render database | `essvee-db` (ID `dpg-dc35m4jrjlhs73es3gsg-a`) |
+| Region | Oregon (web service and PostgreSQL are in the same region so the private database hostname resolves) |
+| Plan | Render free tier (web service sleeps when idle; free PostgreSQL expires 30 days after creation) |
+| UptimeRobot monitor | `ESSVEE Payment Manager - health` (ID `804801244`) — HTTP(S), 5-minute interval, checks `/health` |
+
+The initial Blueprint deployment failed because the web service was created in Singapore while the database was in Oregon. Those resources were removed and recreated with both in Oregon; the live service is verified `Live` and `/health`, `/api/health`, `/docs` and `/` all return HTTP 200.
+
+**Before sending payment reminders:** sign in and open **Settings → UPI** to enter the real UPI ID / VPA. It was intentionally left unset during deployment because it is business-specific; the app shows a configuration screen rather than generating invalid links. Change the generated admin password immediately after first login.
 
 ### Render Blueprint
 
